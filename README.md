@@ -216,6 +216,29 @@ const eventData = await step.waitFor('wait-step', {
 });
 ```
 
+### Resource ID
+
+The optional `resourceId` associates a workflow run with an external entity in your application — a user, an order, a subscription, or any domain object the workflow operates on. It serves two purposes:
+
+1. **Association** — Links each workflow run to the business entity it belongs to, so you can query all runs for a given resource.
+2. **Scoping** — When provided, all read and write operations (get, update, pause, resume, cancel, trigger events) include `resource_id` in their database queries, ensuring you only access workflow runs that belong to that resource. This is useful for enforcing tenant isolation or ownership checks.
+
+`resourceId` is optional on every API method. If you don't need to group or scope runs by an external entity, you can omit it entirely and use `runId` alone.
+
+```typescript
+// Start a workflow scoped to a specific user
+const run = await engine.startWorkflow({
+  workflowId: 'send-welcome-email',
+  resourceId: 'user-123',          // ties this run to user-123
+  input: { email: 'user@example.com' },
+});
+
+// Later, list all workflow runs for that user
+const { items } = await engine.getRuns({
+  resourceId: 'user-123',
+});
+```
+
 ### Pause and Resume
 
 Manually pause a workflow and resume it later:
@@ -321,7 +344,7 @@ const engine = new WorkflowEngine({
 | `start(asEngine?, options?)` | Start the engine and workers |
 | `stop()` | Stop the engine gracefully |
 | `registerWorkflow(definition)` | Register a workflow definition |
-| `startWorkflow({ workflowId, resourceId?, input, options? })` | Start a new workflow run |
+| `startWorkflow({ workflowId, resourceId?, input, options? })` | Start a new workflow run. `resourceId` optionally ties the run to an external entity (see [Resource ID](#resource-id)). |
 | `pauseWorkflow({ runId, resourceId? })` | Pause a running workflow |
 | `resumeWorkflow({ runId, resourceId?, options? })` | Resume a paused workflow |
 | `cancelWorkflow({ runId, resourceId? })` | Cancel a workflow |
@@ -393,7 +416,7 @@ enum WorkflowStatus {
 
 The engine automatically runs migrations on startup to create the required tables:
 
-- `workflow_runs` - Stores workflow execution state, step results, and timeline
+- `workflow_runs` - Stores workflow execution state, step results, and timeline. The optional `resource_id` column (indexed) associates each run with an external entity in your application. See [Resource ID](#resource-id).
 - `pgboss.*` - pg-boss job queue tables for reliable task scheduling
 
 ---

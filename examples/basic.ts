@@ -24,8 +24,7 @@ const onboardUser = workflow('onboard-user', async ({ step, input }) => {
 
 // 2. Start the engine
 async function main() {
-  const DATABASE_URL =
-    process.env.DATABASE_URL ?? 'postgres://localhost:5432/pg_workflows_example';
+  const DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://localhost:5432/pg_workflows_example';
 
   const pool = new pg.Pool({ connectionString: DATABASE_URL });
   const boss = new PgBoss({
