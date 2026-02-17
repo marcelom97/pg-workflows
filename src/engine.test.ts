@@ -491,6 +491,146 @@ describe('WorkflowEngine', () => {
         });
     });
 
+    it('should accumulate timeline entries across multiple sequential steps', async () => {
+      const multiStepWorkflow = workflow('multi-step-workflow', async ({ step }) => {
+        await step.run('step-1', async () => 'result-1');
+        await step.run('step-2', async () => ({ nested: 'value' }));
+        await step.run('step-3', async () => 42);
+        return 'done';
+      });
+
+      await engine.registerWorkflow(multiStepWorkflow);
+      const run = await engine.startWorkflow({
+        resourceId,
+        workflowId: 'multi-step-workflow',
+        input: {},
+      });
+
+      await expect
+        .poll(async () => await engine.getRun({ runId: run.id, resourceId }))
+        .toMatchObject({
+          status: WorkflowStatus.COMPLETED,
+          output: 'done',
+          timeline: {
+            'step-1': { output: 'result-1' },
+            'step-2': { output: { nested: 'value' } },
+            'step-3': { output: 42 },
+          },
+        });
+
+      const completedRun = await engine.getRun({ runId: run.id, resourceId });
+      expect(Object.keys(completedRun.timeline)).toHaveLength(3);
+    });
+
+    it('should preserve timeline entries from before pause through resume', async () => {
+      const pauseTimelineWorkflow = workflow('pause-timeline-workflow', async ({ step }) => {
+        await step.run('step-1', async () => 'before-pause');
+        await step.pause('step-2');
+        await step.run('step-3', async () => 'after-pause');
+        return 'done';
+      });
+
+      await engine.registerWorkflow(pauseTimelineWorkflow);
+      const run = await engine.startWorkflow({
+        resourceId,
+        workflowId: 'pause-timeline-workflow',
+        input: {},
+      });
+
+      // Wait for the workflow to pause
+      await expect
+        .poll(async () => (await engine.getRun({ runId: run.id, resourceId })).status)
+        .toBe(WorkflowStatus.PAUSED);
+
+      // While paused, step-1 and the wait-for entry should be present
+      const pausedRun = await engine.getRun({ runId: run.id, resourceId });
+      expect(pausedRun.timeline).toMatchObject({
+        'step-1': { output: 'before-pause' },
+        'step-2-wait-for': {
+          waitFor: { eventName: '__internal_pause' },
+        },
+      });
+
+      await engine.resumeWorkflow({ runId: run.id, resourceId });
+
+      // After resume and completion, all entries should be preserved
+      await expect
+        .poll(async () => await engine.getRun({ runId: run.id, resourceId }))
+        .toMatchObject({
+          status: WorkflowStatus.COMPLETED,
+          output: 'done',
+          timeline: {
+            'step-1': { output: 'before-pause' },
+            'step-2-wait-for': {
+              waitFor: { eventName: '__internal_pause' },
+            },
+            'step-2': { output: {} },
+            'step-3': { output: 'after-pause' },
+          },
+        });
+
+      const completedRun = await engine.getRun({ runId: run.id, resourceId });
+      expect(Object.keys(completedRun.timeline)).toHaveLength(4);
+    });
+
+    it('should preserve timeline entries across run, waitFor, and run steps', async () => {
+      const mixedWorkflow = workflow('mixed-timeline-workflow', async ({ step }) => {
+        await step.run('setup', async () => ({ initialized: true }));
+        await step.waitFor('approval', { eventName: 'approved' });
+        await step.run('finalize', async () => 'finalized');
+        return 'all-done';
+      });
+
+      await engine.registerWorkflow(mixedWorkflow);
+      const run = await engine.startWorkflow({
+        resourceId,
+        workflowId: 'mixed-timeline-workflow',
+        input: {},
+      });
+
+      // Wait for the workflow to pause on waitFor
+      await expect
+        .poll(async () => (await engine.getRun({ runId: run.id, resourceId })).status)
+        .toBe(WorkflowStatus.PAUSED);
+
+      // Verify timeline has the run entry and the wait-for entry
+      const pausedRun = await engine.getRun({ runId: run.id, resourceId });
+      expect(pausedRun.timeline).toMatchObject({
+        setup: { output: { initialized: true } },
+        'approval-wait-for': {
+          waitFor: { eventName: 'approved' },
+        },
+      });
+      expect(Object.keys(pausedRun.timeline)).toHaveLength(2);
+
+      // Trigger the event with payload
+      await engine.triggerEvent({
+        runId: run.id,
+        resourceId,
+        eventName: 'approved',
+        data: { approvedBy: 'admin', level: 3 },
+      });
+
+      // After completion, all 4 timeline entries must be present
+      await expect
+        .poll(async () => await engine.getRun({ runId: run.id, resourceId }))
+        .toMatchObject({
+          status: WorkflowStatus.COMPLETED,
+          output: 'all-done',
+          timeline: {
+            setup: { output: { initialized: true } },
+            'approval-wait-for': {
+              waitFor: { eventName: 'approved' },
+            },
+            approval: { output: { approvedBy: 'admin', level: 3 } },
+            finalize: { output: 'finalized' },
+          },
+        });
+
+      const completedRun = await engine.getRun({ runId: run.id, resourceId });
+      expect(Object.keys(completedRun.timeline)).toHaveLength(4);
+    });
+
     it('should should mark workflows with error as failed', async () => {
       const errorRetryWorkflow = workflow('error-workflow', async ({ step }) => {
         await step.run('step-1', async () => {

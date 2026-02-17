@@ -66,8 +66,8 @@
     "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
+    "es-toolkit": "^1.44.0",
     "ksuid": "^3.0.0",
-    "lodash": "^4.17.21",
     "pg": "^8.13.1",
     "pg-boss": ">=12.0.0",
     "typescript": "^5.9.3",
@@ -76,7 +76,6 @@
   "devDependencies": {
     "@biomejs/biome": "^2.3.10",
     "@electric-sql/pglite": "^0.3.14",
-    "@types/lodash": "^4.17.13",
     "@types/node": "^22.10.2",
     "@types/pg": "^8.11.10",
     "bunup": "^0.16.11",

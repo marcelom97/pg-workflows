@@ -1,4 +1,4 @@
-import merge from 'lodash/merge';
+import { merge } from 'es-toolkit';
 import type { Db, Job, PgBoss } from 'pg-boss';
 import type { z } from 'zod';
 import { parseWorkflowHandler } from './ast-parser';
