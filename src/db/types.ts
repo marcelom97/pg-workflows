@@ -19,4 +19,5 @@ export type WorkflowRun = {
   jobId: string | null;
   cron: string | null;
   timezone: string | null;
+  idempotencyKey: string | null;
 };
