@@ -452,6 +452,15 @@ export class WorkflowEngine {
 
     this.logger.log(`cancelled workflow run with id ${runId}`);
 
+    const cancelledWorkflow = this.workflows.get(run.workflowId);
+    if (cancelledWorkflow) {
+      await this.invokeHook('onCancel', cancelledWorkflow.onCancel, {
+        run,
+        workflowId: run.workflowId,
+        runId,
+      });
+    }
+
     return run;
   }
 
@@ -664,6 +673,15 @@ export class WorkflowEngine {
         }
       }
 
+      if (run.retryCount === 0) {
+        await this.invokeHook('onStart', workflow.onStart, {
+          run,
+          workflowId,
+          runId,
+          input: run.input,
+        });
+      }
+
       const context: WorkflowContext = {
         input: run.input as z.ZodTypeAny,
         workflowId: run.workflowId,
@@ -743,6 +761,17 @@ export class WorkflowEngine {
           runId,
           workflowId,
         });
+
+        const completedRun = await this.getRun({ runId, resourceId });
+        const hookCtx = { run: completedRun, workflowId, runId };
+        await this.invokeHook('onSuccess', workflow.onSuccess, {
+          ...hookCtx,
+          output: normalizedResult,
+        });
+        await this.invokeHook('onComplete', workflow.onComplete, {
+          ...hookCtx,
+          result: { ok: true, output: normalizedResult },
+        });
       }
     } catch (error) {
       if (run.retryCount < run.maxRetries) {
@@ -781,6 +810,18 @@ export class WorkflowEngine {
           error: error instanceof Error ? error.message : String(error),
           jobId: job?.id,
         },
+      });
+
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const failedRun = await this.getRun({ runId, resourceId });
+      const hookCtx = { run: failedRun, workflowId, runId };
+      await this.invokeHook('onFailure', workflow.onFailure, {
+        ...hookCtx,
+        error: errorMessage,
+      });
+      await this.invokeHook('onComplete', workflow.onComplete, {
+        ...hookCtx,
+        result: { ok: false, error: errorMessage },
       });
 
       throw error;
@@ -1002,6 +1043,22 @@ export class WorkflowEngine {
       runId: run.id,
       workflowId: run.workflowId,
     });
+  }
+
+  private async invokeHook(
+    hookName: string,
+    hook: ((...args: unknown[]) => Promise<void> | void) | undefined,
+    ctx: Record<string, unknown>,
+  ): Promise<void> {
+    if (!hook) return;
+    try {
+      await hook(ctx);
+    } catch (error) {
+      this.logger.error(
+        `Hook "${hookName}" threw an error (ignored):`,
+        error instanceof Error ? error : new Error(String(error)),
+      );
+    }
   }
 
   private async checkIfHasStarted(): Promise<void> {
