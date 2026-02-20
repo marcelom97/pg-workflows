@@ -19,4 +19,5 @@ export type WorkflowRun = {
   jobId: string | null;
   triggerSource: 'api' | 'cron';
   scheduleContext: { timestamp: Date; lastTimestamp: Date | undefined; timezone: string } | null;
+  idempotencyKey: string | null;
 };

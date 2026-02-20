@@ -27,6 +27,7 @@ type WorkflowRunRow = {
   job_id: string | null;
   trigger_source: 'api' | 'cron';
   schedule_context: string | { timestamp: string; lastTimestamp?: string; timezone: string } | null;
+  idempotency_key: string | null;
 };
 
 function mapRowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
@@ -68,6 +69,7 @@ function mapRowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
           };
         })()
       : null,
+    idempotencyKey: row.idempotency_key ?? null,
   };
 }
 
@@ -82,6 +84,7 @@ export async function insertWorkflowRun(
     timeoutAt,
     triggerSource,
     scheduleContext,
+    idempotencyKey,
   }: {
     resourceId?: string;
     workflowId: string;
@@ -92,6 +95,7 @@ export async function insertWorkflowRun(
     timeoutAt: Date | null;
     triggerSource?: 'api' | 'cron';
     scheduleContext?: { timestamp: Date; lastTimestamp: Date | undefined; timezone: string };
+    idempotencyKey?: string;
   },
   db: Db,
 ): Promise<WorkflowRun> {
@@ -100,22 +104,23 @@ export async function insertWorkflowRun(
 
   const result = await db.executeSql(
     `INSERT INTO workflow_runs (
-      id, 
-      resource_id, 
-      workflow_id, 
-      current_step_id, 
-      status, 
-      input, 
-      max_retries, 
+      id,
+      resource_id,
+      workflow_id,
+      current_step_id,
+      status,
+      input,
+      max_retries,
       timeout_at,
       created_at,
       updated_at,
       timeline,
       retry_count,
       trigger_source,
-      schedule_context
+      schedule_context,
+      idempotency_key
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
     RETURNING *`,
     [
       runId,
@@ -132,6 +137,7 @@ export async function insertWorkflowRun(
       0,
       triggerSource ?? 'api',
       scheduleContext ? JSON.stringify(scheduleContext) : null,
+      idempotencyKey ?? null,
     ],
   );
 
@@ -197,6 +203,29 @@ export async function getLastCronCompletedAt(
   }
 
   return typeof row.completed_at === 'string' ? new Date(row.completed_at) : row.completed_at;
+}
+
+export async function getActiveWorkflowRunByIdempotencyKey(
+  {
+    workflowId,
+    idempotencyKey,
+  }: {
+    workflowId: string;
+    idempotencyKey: string;
+  },
+  db: Db,
+): Promise<WorkflowRun | null> {
+  const result = await db.executeSql(
+    `SELECT * FROM workflow_runs
+     WHERE workflow_id = $1 AND idempotency_key = $2
+     AND status NOT IN ('completed', 'failed', 'cancelled')
+     LIMIT 1`,
+    [workflowId, idempotencyKey],
+  );
+
+  const row = result.rows[0];
+  if (!row) return null;
+  return mapRowToWorkflowRun(row);
 }
 
 export async function updateWorkflowRun(
