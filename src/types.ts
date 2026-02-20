@@ -36,11 +36,16 @@ export type CronConfig = {
   timezone?: string;
 };
 
+export type ConcurrencyConfig = {
+  limit: number;
+};
+
 export type WorkflowOptions<I extends InputParameters> = {
   timeout?: number;
   retries?: number;
   inputSchema?: I;
   cron?: string | CronConfig;
+  concurrency?: ConcurrencyConfig;
 };
 
 export type StepBaseContext = {
@@ -105,7 +110,11 @@ export type WorkflowDefinition<
   timeout?: number; // milliseconds
   retries?: number;
   cron?: CronConfig;
+<<<<<<< HEAD
   plugins?: WorkflowPlugin[];
+=======
+  concurrency?: ConcurrencyConfig;
+>>>>>>> f4a9861 (feat: add ConcurrencyConfig type for per-workflow concurrency limits)
 };
 
 export type StepInternalDefinition = {
