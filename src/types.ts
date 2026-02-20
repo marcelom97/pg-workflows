@@ -31,11 +31,30 @@ export type CronConfig = {
   timezone?: string;
 };
 
+export type HookContext = {
+  run: WorkflowRun;
+  workflowId: string;
+  runId: string;
+};
+
+export type OnStartHook = (ctx: HookContext & { input: unknown }) => Promise<void> | void;
+export type OnSuccessHook = (ctx: HookContext & { output: unknown }) => Promise<void> | void;
+export type OnFailureHook = (ctx: HookContext & { error: string }) => Promise<void> | void;
+export type OnCompleteHook = (
+  ctx: HookContext & { result: { ok: boolean; output?: unknown; error?: string } },
+) => Promise<void> | void;
+export type OnCancelHook = (ctx: HookContext) => Promise<void> | void;
+
 export type WorkflowOptions<I extends Parameters> = {
   timeout?: number;
   retries?: number;
   inputSchema?: I;
   cron?: string | CronConfig;
+  onStart?: OnStartHook;
+  onSuccess?: OnSuccessHook;
+  onFailure?: OnFailureHook;
+  onComplete?: OnCompleteHook;
+  onCancel?: OnCancelHook;
 };
 
 export interface WorkflowLogger {
@@ -79,6 +98,11 @@ export type WorkflowDefinition<T extends Parameters = Parameters> = {
   timeout?: number; // milliseconds
   retries?: number;
   cron?: CronConfig;
+  onStart?: OnStartHook;
+  onSuccess?: OnSuccessHook;
+  onFailure?: OnFailureHook;
+  onComplete?: OnCompleteHook;
+  onCancel?: OnCancelHook;
 };
 
 export type InternalStepDefinition = {
