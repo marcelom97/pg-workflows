@@ -14,7 +14,17 @@ function createWorkflowFactory<TStepExt extends object = object>(
   const factory = (<I extends InputParameters>(
     id: string,
     handler: (context: WorkflowContext<I, StepBaseContext & TStepExt>) => Promise<unknown>,
-    { inputSchema, timeout, retries, cron }: WorkflowOptions<I> = {},
+    {
+      inputSchema,
+      timeout,
+      retries,
+      cron,
+      onStart,
+      onSuccess,
+      onFailure,
+      onComplete,
+      onCancel,
+    }: WorkflowOptions<I> = {},
   ): WorkflowDefinition<I, StepBaseContext & TStepExt> => ({
     id,
     handler,
@@ -22,6 +32,11 @@ function createWorkflowFactory<TStepExt extends object = object>(
     timeout,
     retries,
     cron: typeof cron === 'string' ? { expression: cron } : cron,
+    onStart,
+    onSuccess,
+    onFailure,
+    onComplete,
+    onCancel,
     plugins: plugins.length > 0 ? (plugins as WorkflowPlugin[]) : undefined,
   })) as WorkflowFactory<TStepExt>;
 
