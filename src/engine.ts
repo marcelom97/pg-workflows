@@ -19,6 +19,8 @@ import {
   type InternalWorkflowLogger,
   type InternalWorkflowLoggerContext,
   type inferParameters,
+  type Middleware,
+  type MiddlewareContext,
   type Parameters,
   type ScheduleContext,
   StepType,
@@ -78,6 +80,7 @@ export class WorkflowEngine {
   private boss: PgBoss;
   private db: Db;
   private unregisteredWorkflows = new Map<string, WorkflowDefinition>();
+  private middlewareStack: Middleware[] = [];
   private _started = false;
 
   public workflows: Map<string, InternalWorkflowDefinition> = new Map<
@@ -90,10 +93,12 @@ export class WorkflowEngine {
     workflows,
     logger,
     boss,
+    middleware,
   }: Partial<{
     workflows: WorkflowDefinition[];
     logger: WorkflowLogger;
     boss: PgBoss;
+    middleware: Middleware[];
   }> = {}) {
     this.logger = this.buildLogger(logger ?? defaultLogger);
 
@@ -101,11 +106,20 @@ export class WorkflowEngine {
       this.unregisteredWorkflows = new Map(workflows.map((workflow) => [workflow.id, workflow]));
     }
 
+    if (middleware) {
+      this.middlewareStack = [...middleware];
+    }
+
     if (!boss) {
       throw new WorkflowEngineError('PgBoss instance is required in constructor');
     }
     this.boss = boss;
     this.db = boss.getDb();
+  }
+
+  use(middleware: Middleware): WorkflowEngine {
+    this.middlewareStack.push(middleware);
+    return this;
   }
 
   async start(
@@ -664,86 +678,98 @@ export class WorkflowEngine {
         }
       }
 
-      const context: WorkflowContext = {
-        input: run.input as z.ZodTypeAny,
-        workflowId: run.workflowId,
-        runId: run.id,
-        timeline: run.timeline,
-        logger: this.logger,
-        schedule,
-        step: {
-          run: async <T>(stepId: string, handler: () => Promise<T>) => {
-            if (!run) {
-              throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
-            }
-
-            return this.runStep({
-              stepId,
-              run,
-              handler,
-            }) as Promise<T>;
-          },
-          waitFor: async <T extends Parameters>(
-            stepId: string,
-            { eventName, timeout }: { eventName: string; timeout?: number; schema?: T },
-          ) => {
-            if (!run) {
-              throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
-            }
-            return this.waitForEvent({
-              run,
-              stepId,
-              eventName,
-              timeout,
-            }) as Promise<inferParameters<T>>;
-          },
-          waitUntil: async (stepId: string, { date }: { date: Date }) => {
-            if (!run) {
-              throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
-            }
-            await this.waitUntilDate({
-              run,
-              stepId,
-              date,
-            });
-          },
-          pause: async (stepId: string) => {
-            if (!run) {
-              throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
-            }
-            return this.pauseStep({
-              stepId,
-              run,
-            });
-          },
-        },
+      const middlewareCtx: MiddlewareContext = {
+        workflowId,
+        runId,
+        run,
+        input: run.input,
       };
 
-      const result = await workflow.handler(context);
+      const coreExecution = async () => {
+        const context: WorkflowContext = {
+          input: run.input as z.ZodTypeAny,
+          workflowId: run.workflowId,
+          runId: run.id,
+          timeline: run.timeline,
+          logger: this.logger,
+          schedule,
+          step: {
+            run: async <T>(stepId: string, handler: () => Promise<T>) => {
+              if (!run) {
+                throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
+              }
 
-      run = await this.getRun({ runId, resourceId });
-
-      if (
-        run.status === WorkflowStatus.RUNNING &&
-        run.currentStepId === workflow.steps[workflow.steps.length - 1]?.id
-      ) {
-        const normalizedResult = result === undefined ? {} : result;
-        await this.updateRun({
-          runId,
-          resourceId,
-          data: {
-            status: WorkflowStatus.COMPLETED,
-            output: normalizedResult,
-            completedAt: new Date(),
-            jobId: job?.id,
+              return this.runStep({
+                stepId,
+                run,
+                handler,
+              }) as Promise<T>;
+            },
+            waitFor: async <T extends Parameters>(
+              stepId: string,
+              { eventName, timeout }: { eventName: string; timeout?: number; schema?: T },
+            ) => {
+              if (!run) {
+                throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
+              }
+              return this.waitForEvent({
+                run,
+                stepId,
+                eventName,
+                timeout,
+              }) as Promise<inferParameters<T>>;
+            },
+            waitUntil: async (stepId: string, { date }: { date: Date }) => {
+              if (!run) {
+                throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
+              }
+              await this.waitUntilDate({
+                run,
+                stepId,
+                date,
+              });
+            },
+            pause: async (stepId: string) => {
+              if (!run) {
+                throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
+              }
+              return this.pauseStep({
+                stepId,
+                run,
+              });
+            },
           },
-        });
+        };
 
-        this.logger.log('Workflow run completed.', {
-          runId,
-          workflowId,
-        });
-      }
+        const result = await workflow.handler(context);
+
+        run = await this.getRun({ runId, resourceId });
+
+        if (
+          run.status === WorkflowStatus.RUNNING &&
+          run.currentStepId === workflow.steps[workflow.steps.length - 1]?.id
+        ) {
+          const normalizedResult = result === undefined ? {} : result;
+          await this.updateRun({
+            runId,
+            resourceId,
+            data: {
+              status: WorkflowStatus.COMPLETED,
+              output: normalizedResult,
+              completedAt: new Date(),
+              jobId: job?.id,
+            },
+          });
+
+          this.logger.log('Workflow run completed.', {
+            runId,
+            workflowId,
+          });
+        }
+      };
+
+      const execute = this.composeMiddleware(this.middlewareStack, middlewareCtx, coreExecution);
+      await execute();
     } catch (error) {
       if (run.retryCount < run.maxRetries) {
         await this.updateRun({
@@ -1008,6 +1034,22 @@ export class WorkflowEngine {
     if (!this._started) {
       throw new WorkflowEngineError('Workflow engine not started');
     }
+  }
+
+  private composeMiddleware(
+    middleware: Middleware[],
+    ctx: MiddlewareContext,
+    core: () => Promise<void>,
+  ): () => Promise<void> {
+    let index = -1;
+    const dispatch = (i: number): Promise<void> => {
+      if (i <= index) return Promise.reject(new Error('next() called multiple times'));
+      index = i;
+      const fn = i === middleware.length ? core : middleware[i];
+      if (!fn) return Promise.resolve();
+      return fn(ctx, () => dispatch(i + 1));
+    };
+    return () => dispatch(0);
   }
 
   private buildLogger(logger: WorkflowLogger): InternalWorkflowLogger {
