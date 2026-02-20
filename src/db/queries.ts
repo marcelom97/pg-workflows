@@ -27,6 +27,7 @@ type WorkflowRunRow = {
   job_id: string | null;
   cron: string | null;
   timezone: string | null;
+  idempotency_key: string | null;
 };
 
 function mapRowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
@@ -56,6 +57,7 @@ function mapRowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
     jobId: row.job_id,
     cron: row.cron,
     timezone: row.timezone,
+    idempotencyKey: row.idempotency_key ?? null,
   };
 }
 
@@ -70,6 +72,7 @@ export async function insertWorkflowRun(
     timeoutAt,
     cron,
     timezone,
+    idempotencyKey,
   }: {
     resourceId?: string;
     workflowId: string;
@@ -80,6 +83,7 @@ export async function insertWorkflowRun(
     timeoutAt: Date | null;
     cron?: string;
     timezone?: string;
+    idempotencyKey?: string;
   },
   db: Db,
 ): Promise<WorkflowRun> {
@@ -101,9 +105,10 @@ export async function insertWorkflowRun(
       timeline,
       retry_count,
       cron,
-      timezone
+      timezone,
+      idempotency_key
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
     RETURNING *`,
     [
       runId,
@@ -120,6 +125,7 @@ export async function insertWorkflowRun(
       0,
       cron ?? null,
       timezone ?? null,
+      idempotencyKey ?? null,
     ],
   );
 
@@ -184,6 +190,29 @@ export async function getWorkflowLastRun(
     return undefined;
   }
 
+  return mapRowToWorkflowRun(row);
+}
+
+export async function getActiveWorkflowRunByIdempotencyKey(
+  {
+    workflowId,
+    idempotencyKey,
+  }: {
+    workflowId: string;
+    idempotencyKey: string;
+  },
+  db: Db,
+): Promise<WorkflowRun | null> {
+  const result = await db.executeSql(
+    `SELECT * FROM workflow_runs
+     WHERE workflow_id = $1 AND idempotency_key = $2
+     AND status NOT IN ('completed', 'failed', 'cancelled')
+     LIMIT 1`,
+    [workflowId, idempotencyKey],
+  );
+
+  const row = result.rows[0];
+  if (!row) return null;
   return mapRowToWorkflowRun(row);
 }
 

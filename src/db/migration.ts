@@ -35,7 +35,8 @@ export async function runMigrations(db: Db): Promise<void> {
         max_retries integer DEFAULT 0 NOT NULL,
         job_id varchar(256),
         cron text,
-        timezone text
+        timezone text,
+        idempotency_key text
       );
     `,
       [],
@@ -66,6 +67,14 @@ export async function runMigrations(db: Db): Promise<void> {
       `CREATE INDEX idx_workflow_runs_cron_completed
        ON workflow_runs (workflow_id, completed_at DESC)
        WHERE cron IS NOT NULL AND status = 'completed';`,
+      [],
+    );
+
+    await db.executeSql(
+      `CREATE UNIQUE INDEX idx_workflow_runs_idempotency
+       ON workflow_runs (workflow_id, idempotency_key)
+       WHERE status NOT IN ('completed', 'failed', 'cancelled')
+       AND idempotency_key IS NOT NULL;`,
       [],
     );
   }
@@ -100,6 +109,28 @@ export async function runMigrations(db: Db): Promise<void> {
       `CREATE INDEX idx_workflow_runs_cron_completed
        ON workflow_runs (workflow_id, completed_at DESC)
        WHERE cron IS NOT NULL AND status = 'completed';`,
+      [],
+    );
+  }
+
+  // Migration: add idempotency_key column
+  const idempotencyKeyExists = await db.executeSql(
+    `SELECT EXISTS (
+      SELECT FROM information_schema.columns
+      WHERE table_schema = current_schema()
+      AND table_name = 'workflow_runs'
+      AND column_name = 'idempotency_key'
+    );`,
+    [],
+  );
+
+  if (!idempotencyKeyExists.rows[0]?.exists) {
+    await db.executeSql(`ALTER TABLE workflow_runs ADD COLUMN idempotency_key text;`, []);
+    await db.executeSql(
+      `CREATE UNIQUE INDEX idx_workflow_runs_idempotency
+       ON workflow_runs (workflow_id, idempotency_key)
+       WHERE status NOT IN ('completed', 'failed', 'cancelled')
+       AND idempotency_key IS NOT NULL;`,
       [],
     );
   }
