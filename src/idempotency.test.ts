@@ -1,3 +1,4 @@
+import type pg from 'pg';
 import type { PgBoss } from 'pg-boss';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { workflow } from './definition';
@@ -7,9 +8,11 @@ import { createTestDatabase } from './tests/test-db';
 import { WorkflowStatus } from './types';
 
 let testBoss: PgBoss;
+let testPool: pg.Pool;
 
 beforeAll(async () => {
   const testDb = await createTestDatabase();
+  testPool = testDb;
   testBoss = await getBoss(testDb);
 });
 
@@ -20,7 +23,7 @@ describe('Idempotency Keys', () => {
       return 'done';
     });
 
-    const engine = new WorkflowEngine({ boss: testBoss, workflows: [wf] });
+    const engine = new WorkflowEngine({ pool: testPool, boss: testBoss, workflows: [wf] });
     await engine.start();
 
     const run1 = await engine.startWorkflow({
@@ -46,7 +49,7 @@ describe('Idempotency Keys', () => {
       return 'done';
     });
 
-    const engine = new WorkflowEngine({ boss: testBoss, workflows: [wf] });
+    const engine = new WorkflowEngine({ pool: testPool, boss: testBoss, workflows: [wf] });
     await engine.start();
 
     const run1 = await engine.startWorkflow({
@@ -69,7 +72,7 @@ describe('Idempotency Keys', () => {
       return await step.run('s1', async () => 'done');
     });
 
-    const engine = new WorkflowEngine({ boss: testBoss, workflows: [wf] });
+    const engine = new WorkflowEngine({ pool: testPool, boss: testBoss, workflows: [wf] });
     await engine.start();
 
     const run1 = await engine.startWorkflow({
@@ -99,6 +102,132 @@ describe('Idempotency Keys', () => {
     await engine.stop();
   }, 30000);
 
+  it('should allow new run after previous one with same key failed', async () => {
+    const wf = workflow(
+      'idemp-fail',
+      async ({ step }) => {
+        return await step.run('s1', async () => {
+          throw new Error('boom');
+        });
+      },
+      { retries: 0 },
+    );
+
+    const engine = new WorkflowEngine({ pool: testPool, boss: testBoss, workflows: [wf] });
+    await engine.start();
+
+    const run1 = await engine.startWorkflow({
+      workflowId: 'idemp-fail',
+      input: {},
+      idempotencyKey: 'fail-key',
+    });
+
+    await expect
+      .poll(
+        async () => {
+          const r = await engine.getRun({ runId: run1.id });
+          return r.status;
+        },
+        { timeout: 10000 },
+      )
+      .toBe(WorkflowStatus.FAILED);
+
+    const run2 = await engine.startWorkflow({
+      workflowId: 'idemp-fail',
+      input: {},
+      idempotencyKey: 'fail-key',
+    });
+
+    expect(run2.id).not.toBe(run1.id);
+
+    await engine.stop();
+  }, 30000);
+
+  it('should allow new run after previous one with same key was cancelled', async () => {
+    const wf = workflow('idemp-cancel', async ({ step }) => {
+      await step.pause('wait');
+      return 'done';
+    });
+
+    const engine = new WorkflowEngine({ pool: testPool, boss: testBoss, workflows: [wf] });
+    await engine.start();
+
+    const run1 = await engine.startWorkflow({
+      workflowId: 'idemp-cancel',
+      input: {},
+      idempotencyKey: 'cancel-key',
+    });
+
+    await expect
+      .poll(
+        async () => {
+          const r = await engine.getRun({ runId: run1.id });
+          return r.status;
+        },
+        { timeout: 10000 },
+      )
+      .toBe(WorkflowStatus.PAUSED);
+
+    await engine.cancelWorkflow({ runId: run1.id });
+
+    const run2 = await engine.startWorkflow({
+      workflowId: 'idemp-cancel',
+      input: {},
+      idempotencyKey: 'cancel-key',
+    });
+
+    expect(run2.id).not.toBe(run1.id);
+
+    await engine.stop();
+  }, 30000);
+
+  it('should store idempotency key on the run', async () => {
+    const wf = workflow('idemp-stored', async ({ step }) => {
+      await step.pause('wait');
+      return 'done';
+    });
+
+    const engine = new WorkflowEngine({ pool: testPool, boss: testBoss, workflows: [wf] });
+    await engine.start();
+
+    const run = await engine.startWorkflow({
+      workflowId: 'idemp-stored',
+      input: {},
+      idempotencyKey: 'my-key',
+    });
+
+    const fetched = await engine.getRun({ runId: run.id });
+    expect(fetched.idempotencyKey).toBe('my-key');
+
+    await engine.stop();
+  }, 30000);
+
+  it('should create separate runs for different keys on same workflow', async () => {
+    const wf = workflow('idemp-diff-keys', async ({ step }) => {
+      await step.pause('wait');
+      return 'done';
+    });
+
+    const engine = new WorkflowEngine({ pool: testPool, boss: testBoss, workflows: [wf] });
+    await engine.start();
+
+    const run1 = await engine.startWorkflow({
+      workflowId: 'idemp-diff-keys',
+      input: {},
+      idempotencyKey: 'key-alpha',
+    });
+
+    const run2 = await engine.startWorkflow({
+      workflowId: 'idemp-diff-keys',
+      input: {},
+      idempotencyKey: 'key-beta',
+    });
+
+    expect(run1.id).not.toBe(run2.id);
+
+    await engine.stop();
+  }, 30000);
+
   it('should scope idempotency to workflow ID', async () => {
     const wf1 = workflow('idemp-scope-a', async ({ step }) => {
       await step.pause('wait');
@@ -109,7 +238,7 @@ describe('Idempotency Keys', () => {
       return 'done';
     });
 
-    const engine = new WorkflowEngine({ boss: testBoss, workflows: [wf1, wf2] });
+    const engine = new WorkflowEngine({ pool: testPool, boss: testBoss, workflows: [wf1, wf2] });
     await engine.start();
 
     const run1 = await engine.startWorkflow({
