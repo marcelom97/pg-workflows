@@ -31,11 +31,16 @@ export type CronConfig = {
   timezone?: string;
 };
 
+export type ConcurrencyConfig = {
+  limit: number;
+};
+
 export type WorkflowOptions<I extends Parameters> = {
   timeout?: number;
   retries?: number;
   inputSchema?: I;
   cron?: string | CronConfig;
+  concurrency?: ConcurrencyConfig;
 };
 
 export interface WorkflowLogger {
@@ -79,6 +84,7 @@ export type WorkflowDefinition<T extends Parameters = Parameters> = {
   timeout?: number; // milliseconds
   retries?: number;
   cron?: CronConfig;
+  concurrency?: ConcurrencyConfig;
 };
 
 export type InternalStepDefinition = {
