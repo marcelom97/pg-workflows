@@ -31,9 +31,22 @@ export type CronConfig = {
   timezone?: string;
 };
 
+export type BackoffConfig = {
+  factor?: number;
+  minDelay?: number;
+  maxDelay?: number;
+  jitter?: boolean;
+};
+
+export type RetryConfig = {
+  maxAttempts: number;
+  backoff?: BackoffConfig;
+};
+
 export type WorkflowOptions<I extends Parameters> = {
   timeout?: number;
   retries?: number;
+  retry?: RetryConfig;
   inputSchema?: I;
   cron?: string | CronConfig;
 };
@@ -78,6 +91,7 @@ export type WorkflowDefinition<T extends Parameters = Parameters> = {
   inputSchema?: T;
   timeout?: number; // milliseconds
   retries?: number;
+  retry?: RetryConfig;
   cron?: CronConfig;
 };
 

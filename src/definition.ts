@@ -9,7 +9,7 @@ import type {
 export function workflow<I extends Parameters>(
   id: string,
   handler: (context: WorkflowContext<inferParameters<I>>) => Promise<unknown>,
-  { inputSchema, timeout, retries, cron }: WorkflowOptions<I> = {},
+  { inputSchema, timeout, retries, retry, cron }: WorkflowOptions<I> = {},
 ): WorkflowDefinition<I> {
   return {
     id,
@@ -17,6 +17,7 @@ export function workflow<I extends Parameters>(
     inputSchema,
     timeout,
     retries,
+    retry,
     cron: typeof cron === 'string' ? { expression: cron } : cron,
   };
 }
