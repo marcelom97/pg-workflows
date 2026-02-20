@@ -31,6 +31,15 @@ export type CronConfig = {
   timezone?: string;
 };
 
+export type MiddlewareContext = {
+  workflowId: string;
+  runId: string;
+  run: WorkflowRun;
+  input: unknown;
+};
+
+export type Middleware = (ctx: MiddlewareContext, next: () => Promise<void>) => Promise<void>;
+
 export type WorkflowOptions<I extends Parameters> = {
   timeout?: number;
   retries?: number;
