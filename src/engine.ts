@@ -20,6 +20,7 @@ import {
   type InternalWorkflowLoggerContext,
   type inferParameters,
   type Parameters,
+  type RetryConfig,
   type ScheduleContext,
   StepType,
   type WorkflowContext,
@@ -293,6 +294,7 @@ export class WorkflowEngine {
     options?: {
       timeout?: number;
       retries?: number;
+      retry?: RetryConfig;
       expireInSeconds?: number;
       batchSize?: number;
     };
@@ -322,6 +324,7 @@ export class WorkflowEngine {
     options?: {
       timeout?: number;
       retries?: number;
+      retry?: RetryConfig;
       expireInSeconds?: number;
       batchSize?: number;
     };
@@ -361,7 +364,12 @@ export class WorkflowEngine {
           currentStepId: initialStepId,
           status: WorkflowStatus.RUNNING,
           input,
-          maxRetries: options?.retries ?? workflow.retries ?? 0,
+          maxRetries:
+            options?.retry?.maxAttempts ??
+            options?.retries ??
+            workflow.retry?.maxAttempts ??
+            workflow.retries ??
+            0,
           timeoutAt,
           triggerSource,
           scheduleContext,
@@ -765,7 +773,7 @@ export class WorkflowEngine {
           },
         });
 
-        const retryDelay = 2 ** run.retryCount * 1000;
+        const retryDelay = this.calculateRetryDelay(run.retryCount, workflow);
 
         // NOTE: Do not use pg-boss retryLimit and retryBackoff so that we can fully control the retry logic from the WorkflowEngine and not PGBoss.
         const pgBossJob: WorkflowRunJobParameters = {
@@ -1018,6 +1026,17 @@ export class WorkflowEngine {
     if (!this._started) {
       throw new WorkflowEngineError('Workflow engine not started');
     }
+  }
+
+  private calculateRetryDelay(retryCount: number, workflow: InternalWorkflowDefinition): number {
+    const backoff = workflow.retry?.backoff;
+    const factor = backoff?.factor ?? 2;
+    const minDelay = backoff?.minDelay ?? 1000;
+    const maxDelay = backoff?.maxDelay ?? 30000;
+    const jitter = backoff?.jitter ?? false;
+
+    const baseDelay = Math.min(factor ** retryCount * minDelay, maxDelay);
+    return jitter ? baseDelay * (0.75 + Math.random() * 0.5) : baseDelay;
   }
 
   private buildLogger(logger: WorkflowLogger): InternalWorkflowLogger {
