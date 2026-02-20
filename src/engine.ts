@@ -144,6 +144,25 @@ export class WorkflowEngine {
       }
 
       for (const wf of this.workflows.values()) {
+        if (wf.concurrency) {
+          const queueName = this.getQueueName(wf);
+          await this.boss.createQueue(queueName);
+          await this.boss.work<WorkflowRunJobParameters>(
+            queueName,
+            {
+              pollingIntervalSeconds: 0.5,
+              batchSize: batchSize ?? 1,
+              concurrency: wf.concurrency.limit,
+            },
+            (job) => this.handleWorkflowRun(job),
+          );
+          this.logger.log(
+            `Worker started for ${queueName} with concurrency limit ${wf.concurrency.limit}`,
+          );
+        }
+      }
+
+      for (const wf of this.workflows.values()) {
         if (wf.cron) {
           try {
             await this.scheduleCronWorkflow(wf);
@@ -219,6 +238,26 @@ export class WorkflowEngine {
       if (step.loop) tags.push('[loop]');
       if (step.isDynamic) tags.push('[dynamic]');
       this.logger.log(`  └─ (${StepTypeToIcon[step.type]}) ${step.id} ${tags.join(' ')}`);
+    }
+
+    if (this._started && definition.concurrency) {
+      const internalDef = this.workflows.get(definition.id);
+      if (internalDef) {
+        const queueName = this.getQueueName(internalDef);
+        await this.boss.createQueue(queueName);
+        await this.boss.work<WorkflowRunJobParameters>(
+          queueName,
+          {
+            pollingIntervalSeconds: 0.5,
+            batchSize: 1,
+            concurrency: definition.concurrency.limit,
+          },
+          (job) => this.handleWorkflowRun(job),
+        );
+        this.logger.log(
+          `Worker started for ${queueName} with concurrency limit ${definition.concurrency.limit}`,
+        );
+      }
     }
 
     if (this._started && definition.cron) {
@@ -370,7 +409,8 @@ export class WorkflowEngine {
         input,
       };
 
-      await this.boss.send(WORKFLOW_RUN_QUEUE_NAME, job, {
+      const queueName = this.getQueueName(workflow);
+      await this.boss.send(queueName, job, {
         startAfter: new Date(),
         expireInSeconds: options?.expireInSeconds ?? defaultExpireInSeconds,
       });
@@ -764,7 +804,8 @@ export class WorkflowEngine {
           workflowId,
           input,
         };
-        await this.boss?.send('workflow-run', pgBossJob, {
+        const retryQueueName = this.getQueueName(workflow);
+        await this.boss?.send(retryQueueName, pgBossJob, {
           startAfter: new Date(Date.now() + retryDelay),
           expireInSeconds: defaultExpireInSeconds,
         });
@@ -1002,6 +1043,10 @@ export class WorkflowEngine {
       runId: run.id,
       workflowId: run.workflowId,
     });
+  }
+
+  private getQueueName(workflow: InternalWorkflowDefinition): string {
+    return workflow.concurrency ? `workflow-run.${workflow.id}` : WORKFLOW_RUN_QUEUE_NAME;
   }
 
   private async checkIfHasStarted(): Promise<void> {
