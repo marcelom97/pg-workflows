@@ -6,6 +6,7 @@ import type { z } from 'zod';
 import { parseWorkflowHandler } from './ast-parser';
 import { runMigrations } from './db/migration';
 import {
+  getActiveWorkflowRunByIdempotencyKey,
   getWorkflowLastRun,
   getWorkflowRun,
   getWorkflowRuns,
@@ -313,10 +314,12 @@ export class WorkflowEngine {
     workflowId,
     input,
     options,
+    idempotencyKey,
   }: {
     resourceId?: string;
     workflowId: string;
     input: unknown;
+    idempotencyKey?: string;
     options?: {
       timeout?: number;
       retries?: number;
@@ -329,6 +332,7 @@ export class WorkflowEngine {
       workflowId,
       input,
       options,
+      idempotencyKey,
     });
   }
 
@@ -339,12 +343,14 @@ export class WorkflowEngine {
     options,
     cron,
     timezone,
+    idempotencyKey,
   }: {
     resourceId?: string;
     workflowId: string;
     input: unknown;
     cron?: string;
     timezone?: string;
+    idempotencyKey?: string;
     options?: {
       timeout?: number;
       retries?: number;
@@ -373,6 +379,20 @@ export class WorkflowEngine {
       }
     }
 
+    if (idempotencyKey) {
+      const existingRun = await getActiveWorkflowRunByIdempotencyKey(
+        { workflowId, idempotencyKey },
+        this.db,
+      );
+      if (existingRun) {
+        this.logger.log(`Returning existing run for idempotency key "${idempotencyKey}"`, {
+          runId: existingRun.id,
+          workflowId,
+        });
+        return existingRun;
+      }
+    }
+
     const initialStepId = workflow.steps[0]?.id ?? '__start__';
 
     const run = await withPostgresTransaction(
@@ -395,6 +415,7 @@ export class WorkflowEngine {
             timeoutAt,
             cron,
             timezone,
+            idempotencyKey,
           },
           _db,
         );
