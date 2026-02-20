@@ -20,6 +20,8 @@ import { WorkflowEngineError, WorkflowRunNotFoundError } from './error';
 import {
   type InferInputParameters,
   type InputParameters,
+  type Middleware,
+  type MiddlewareContext,
   type ScheduleContext,
   type StepBaseContext,
   StepType,
@@ -95,6 +97,7 @@ export class WorkflowEngine {
   private pool: pg.Pool;
   private _ownsPool = false;
   private unregisteredWorkflows = new Map<string, WorkflowDefinition>();
+  private middlewareStack: Middleware[] = [];
   private _started = false;
 
   public workflows: Map<string, WorkflowInternalDefinition> = new Map<
@@ -103,7 +106,7 @@ export class WorkflowEngine {
   >();
   private logger: WorkflowInternalLogger;
 
-  constructor({ workflows, logger, boss, ...connectionOptions }: WorkflowEngineOptions) {
+  constructor({ workflows, logger, boss, middleware, ...connectionOptions }: WorkflowEngineOptions & { middleware?: Middleware[] }) {
     this.logger = this.buildLogger(logger ?? defaultLogger);
 
     if ('pool' in connectionOptions && connectionOptions.pool) {
@@ -119,6 +122,10 @@ export class WorkflowEngine {
       this.unregisteredWorkflows = new Map(workflows.map((workflow) => [workflow.id, workflow]));
     }
 
+    if (middleware) {
+      this.middlewareStack = [...middleware];
+    }
+
     const db: Db = {
       executeSql: (text: string, values?: unknown[]) =>
         this.pool.query(text, values) as Promise<{ rows: unknown[] }>,
@@ -130,6 +137,11 @@ export class WorkflowEngine {
       this.boss = new PgBoss({ db, schema: DEFAULT_PGBOSS_SCHEMA });
     }
     this.db = this.boss.getDb();
+  }
+
+  use(middleware: Middleware): WorkflowEngine {
+    this.middlewareStack.push(middleware);
+    return this;
   }
 
   async start(
@@ -711,129 +723,141 @@ export class WorkflowEngine {
         }
       }
 
-      const baseStep = {
-        run: async <T>(stepId: string, handler: () => Promise<T>) => {
-          if (!run) {
-            throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
-          }
-          return this.runStep({ stepId, run, handler }) as Promise<T>;
-        },
-        waitFor: async <T extends InputParameters>(
-          stepId: string,
-          { eventName, timeout }: { eventName: string; timeout?: number; schema?: T },
-        ) => {
-          if (!run) {
-            throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
-          }
-          const timeoutDate = timeout ? new Date(Date.now() + timeout) : undefined;
-          return this.waitStep({ run, stepId, eventName, timeoutDate }) as Promise<
-            InferInputParameters<T> | undefined
-          >;
-        },
-        waitUntil: async (
-          stepId: string,
-          dateOrOptions: Date | string | { date: Date | string },
-        ) => {
-          if (!run) {
-            throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
-          }
-          const date =
-            dateOrOptions instanceof Date
-              ? dateOrOptions
-              : typeof dateOrOptions === 'string'
-                ? new Date(dateOrOptions)
-                : dateOrOptions.date instanceof Date
-                  ? dateOrOptions.date
-                  : new Date(dateOrOptions.date);
-          await this.waitStep({ run, stepId, timeoutDate: date });
-        },
-        pause: async (stepId: string) => {
-          if (!run) {
-            throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
-          }
-          await this.waitStep({ run, stepId, eventName: PAUSE_EVENT_NAME });
-        },
-        delay: async (stepId: string, duration: Duration) => {
-          if (!run) {
-            throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
-          }
-          await this.waitStep({
-            run,
-            stepId,
-            timeoutDate: new Date(Date.now() + parseDuration(duration)),
-          });
-        },
-        get sleep() {
-          return this.delay;
-        },
-        poll: async <T>(
-          stepId: string,
-          conditionFn: () => Promise<T | false>,
-          options?: { interval?: Duration; timeout?: Duration },
-        ) => {
-          if (!run) {
-            throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
-          }
-          const intervalMs = parseDuration(options?.interval ?? '30s');
-          if (intervalMs < 30_000) {
-            throw new WorkflowEngineError(
-              `step.poll interval must be at least 30s (got ${intervalMs}ms)`,
-              workflowId,
-              runId,
-            );
-          }
-          const timeoutMs = options?.timeout ? parseDuration(options.timeout) : undefined;
-          return this.pollStep({ run, stepId, conditionFn, intervalMs, timeoutMs }) as Promise<
-            { timedOut: false; data: T } | { timedOut: true }
-          >;
-        },
+      const middlewareCtx: MiddlewareContext = {
+        workflowId,
+        runId,
+        run,
+        input: run.input,
       };
 
-      let step = { ...baseStep };
-      const plugins = workflow.plugins ?? [];
-      for (const plugin of plugins) {
-        const extra = plugin.methods(step);
-        step = { ...step, ...extra };
-      }
-
-      const context: WorkflowContext = {
-        input: run.input as z.ZodTypeAny,
-        workflowId: run.workflowId,
-        runId: run.id,
-        timeline: run.timeline,
-        logger: this.logger,
-        schedule,
-        step,
-      };
-
-      const result = await workflow.handler(context);
-
-      run = await this.getRun({ runId, resourceId });
-
-      const isLastParsedStep = run.currentStepId === workflow.steps[workflow.steps.length - 1]?.id;
-      const hasPluginSteps = (workflow.plugins?.length ?? 0) > 0;
-      const noParsedSteps = workflow.steps.length === 0;
-      const shouldComplete =
-        run.status === WorkflowStatus.RUNNING &&
-        (noParsedSteps || isLastParsedStep || (hasPluginSteps && result !== undefined));
-      if (shouldComplete) {
-        const normalizedResult = result === undefined ? {} : result;
-        await this.updateRun({
-          runId,
-          resourceId,
-          data: {
-            status: WorkflowStatus.COMPLETED,
-            output: normalizedResult,
-            completedAt: new Date(),
-            jobId: job?.id,
+      const coreExecution = async () => {
+        const baseStep = {
+          run: async <T>(stepId: string, handler: () => Promise<T>) => {
+            if (!run) {
+              throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
+            }
+            return this.runStep({ stepId, run, handler }) as Promise<T>;
           },
-        });
+          waitFor: async <T extends InputParameters>(
+            stepId: string,
+            { eventName, timeout }: { eventName: string; timeout?: number; schema?: T },
+          ) => {
+            if (!run) {
+              throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
+            }
+            const timeoutDate = timeout ? new Date(Date.now() + timeout) : undefined;
+            return this.waitStep({ run, stepId, eventName, timeoutDate }) as Promise<
+              InferInputParameters<T> | undefined
+            >;
+          },
+          waitUntil: async (
+            stepId: string,
+            dateOrOptions: Date | string | { date: Date | string },
+          ) => {
+            if (!run) {
+              throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
+            }
+            const date =
+              dateOrOptions instanceof Date
+                ? dateOrOptions
+                : typeof dateOrOptions === 'string'
+                  ? new Date(dateOrOptions)
+                  : dateOrOptions.date instanceof Date
+                    ? dateOrOptions.date
+                    : new Date(dateOrOptions.date);
+            await this.waitStep({ run, stepId, timeoutDate: date });
+          },
+          pause: async (stepId: string) => {
+            if (!run) {
+              throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
+            }
+            await this.waitStep({ run, stepId, eventName: PAUSE_EVENT_NAME });
+          },
+          delay: async (stepId: string, duration: Duration) => {
+            if (!run) {
+              throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
+            }
+            await this.waitStep({
+              run,
+              stepId,
+              timeoutDate: new Date(Date.now() + parseDuration(duration)),
+            });
+          },
+          get sleep() {
+            return this.delay;
+          },
+          poll: async <T>(
+            stepId: string,
+            conditionFn: () => Promise<T | false>,
+            options?: { interval?: Duration; timeout?: Duration },
+          ) => {
+            if (!run) {
+              throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
+            }
+            const intervalMs = parseDuration(options?.interval ?? '30s');
+            if (intervalMs < 30_000) {
+              throw new WorkflowEngineError(
+                `step.poll interval must be at least 30s (got ${intervalMs}ms)`,
+                workflowId,
+                runId,
+              );
+            }
+            const timeoutMs = options?.timeout ? parseDuration(options.timeout) : undefined;
+            return this.pollStep({ run, stepId, conditionFn, intervalMs, timeoutMs }) as Promise<
+              { timedOut: false; data: T } | { timedOut: true }
+            >;
+          },
+        };
 
-        this.logger.log('Workflow run completed.', {
-          runId,
-          workflowId,
-        });
-      }
+        let step = { ...baseStep };
+        const plugins = workflow.plugins ?? [];
+        for (const plugin of plugins) {
+          const extra = plugin.methods(step);
+          step = { ...step, ...extra };
+        }
+
+        const context: WorkflowContext = {
+          input: run.input as z.ZodTypeAny,
+          workflowId: run.workflowId,
+          runId: run.id,
+          timeline: run.timeline,
+          logger: this.logger,
+          schedule,
+          step,
+        };
+
+        const result = await workflow.handler(context);
+
+        run = await this.getRun({ runId, resourceId });
+
+        const isLastParsedStep = run.currentStepId === workflow.steps[workflow.steps.length - 1]?.id;
+        const hasPluginSteps = (workflow.plugins?.length ?? 0) > 0;
+        const noParsedSteps = workflow.steps.length === 0;
+        const shouldComplete =
+          run.status === WorkflowStatus.RUNNING &&
+          (noParsedSteps || isLastParsedStep || (hasPluginSteps && result !== undefined));
+        if (shouldComplete) {
+          const normalizedResult = result === undefined ? {} : result;
+          await this.updateRun({
+            runId,
+            resourceId,
+            data: {
+              status: WorkflowStatus.COMPLETED,
+              output: normalizedResult,
+              completedAt: new Date(),
+              jobId: job?.id,
+            },
+          });
+
+          this.logger.log('Workflow run completed.', {
+            runId,
+            workflowId,
+          });
+        }
+      };
+
+      const execute = this.composeMiddleware(this.middlewareStack, middlewareCtx, coreExecution);
+      await execute();
     } catch (error) {
       if (run.retryCount < run.maxRetries) {
         await this.updateRun({
@@ -1169,6 +1193,22 @@ export class WorkflowEngine {
     if (!this._started) {
       throw new WorkflowEngineError('Workflow engine not started');
     }
+  }
+
+  private composeMiddleware(
+    middleware: Middleware[],
+    ctx: MiddlewareContext,
+    core: () => Promise<void>,
+  ): () => Promise<void> {
+    let index = -1;
+    const dispatch = (i: number): Promise<void> => {
+      if (i <= index) return Promise.reject(new Error('next() called multiple times'));
+      index = i;
+      const fn = i === middleware.length ? core : middleware[i];
+      if (!fn) return Promise.resolve();
+      return fn(ctx, () => dispatch(i + 1));
+    };
+    return () => dispatch(0);
   }
 
   private buildLogger(logger: WorkflowLogger): WorkflowInternalLogger {
