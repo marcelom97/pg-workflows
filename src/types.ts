@@ -110,11 +110,8 @@ export type WorkflowDefinition<
   timeout?: number; // milliseconds
   retries?: number;
   cron?: CronConfig;
-<<<<<<< HEAD
-  plugins?: WorkflowPlugin[];
-=======
   concurrency?: ConcurrencyConfig;
->>>>>>> f4a9861 (feat: add ConcurrencyConfig type for per-workflow concurrency limits)
+  plugins?: WorkflowPlugin[];
 };
 
 export type StepInternalDefinition = {
