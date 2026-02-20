@@ -186,6 +186,181 @@ describe('Middleware System', () => {
     await engine.stop();
   }, 30000);
 
+  it('should combine constructor and use() middleware in order', async () => {
+    const order: string[] = [];
+
+    const constructorMw: Middleware = async (_ctx, next) => {
+      order.push('constructor');
+      await next();
+    };
+
+    const wf = workflow('mw-combined', async ({ step }) => {
+      return await step.run('s1', async () => {
+        order.push('handler');
+        return 'done';
+      });
+    });
+
+    const engine = new WorkflowEngine({
+      boss: testBoss,
+      workflows: [wf],
+      middleware: [constructorMw],
+    });
+    engine.use(async (_ctx, next) => {
+      order.push('use');
+      await next();
+    });
+    await engine.start();
+
+    const run = await engine.startWorkflow({
+      workflowId: 'mw-combined',
+      input: {},
+    });
+
+    await expect
+      .poll(
+        async () => {
+          const r = await engine.getRun({ runId: run.id });
+          return r.status;
+        },
+        { timeout: 10000 },
+      )
+      .toBe(WorkflowStatus.COMPLETED);
+
+    expect(order).toEqual(['constructor', 'use', 'handler']);
+
+    await engine.stop();
+  }, 30000);
+
+  it('should run middleware on each retry attempt', async () => {
+    let middlewareCalls = 0;
+    let handlerAttempts = 0;
+
+    const wf = workflow(
+      'mw-retry-each',
+      async ({ step }) => {
+        return await step.run('s1', async () => {
+          handlerAttempts++;
+          if (handlerAttempts < 3) throw new Error('not yet');
+          return 'done';
+        });
+      },
+      { retries: 3 },
+    );
+
+    const engine = new WorkflowEngine({
+      boss: testBoss,
+      workflows: [wf],
+      middleware: [
+        async (_ctx, next) => {
+          middlewareCalls++;
+          await next();
+        },
+      ],
+    });
+    await engine.start();
+
+    const run = await engine.startWorkflow({
+      workflowId: 'mw-retry-each',
+      input: {},
+    });
+
+    await expect
+      .poll(
+        async () => {
+          const r = await engine.getRun({ runId: run.id });
+          return r.status;
+        },
+        { timeout: 15000 },
+      )
+      .toBe(WorkflowStatus.COMPLETED);
+
+    expect(handlerAttempts).toBe(3);
+    expect(middlewareCalls).toBe(3);
+
+    await engine.stop();
+  }, 30000);
+
+  it('should short-circuit execution when middleware does not call next()', async () => {
+    let handlerRan = false;
+
+    const wf = workflow(
+      'mw-skip-next',
+      async ({ step }) => {
+        return await step.run('s1', async () => {
+          handlerRan = true;
+          return 'done';
+        });
+      },
+      { retries: 0 },
+    );
+
+    const engine = new WorkflowEngine({
+      boss: testBoss,
+      workflows: [wf],
+      middleware: [
+        async (_ctx, _next) => {
+          // intentionally not calling next()
+        },
+      ],
+    });
+    await engine.start();
+
+    const run = await engine.startWorkflow({
+      workflowId: 'mw-skip-next',
+      input: {},
+    });
+
+    // The workflow won't complete since the handler never runs.
+    // Wait a bit, then verify the handler never executed.
+    await new Promise((r) => setTimeout(r, 2000));
+
+    const finalRun = await engine.getRun({ runId: run.id });
+    expect(handlerRan).toBe(false);
+    expect(finalRun.status).toBe(WorkflowStatus.RUNNING);
+
+    await engine.stop();
+  }, 30000);
+
+  it('should provide run object with correct status in middleware context', async () => {
+    let capturedRunStatus: string | undefined;
+
+    const wf = workflow('mw-run-status', async ({ step }) => {
+      return await step.run('s1', async () => 'done');
+    });
+
+    const engine = new WorkflowEngine({
+      boss: testBoss,
+      workflows: [wf],
+      middleware: [
+        async (ctx, next) => {
+          capturedRunStatus = ctx.run.status;
+          await next();
+        },
+      ],
+    });
+    await engine.start();
+
+    const run = await engine.startWorkflow({
+      workflowId: 'mw-run-status',
+      input: {},
+    });
+
+    await expect
+      .poll(
+        async () => {
+          const r = await engine.getRun({ runId: run.id });
+          return r.status;
+        },
+        { timeout: 10000 },
+      )
+      .toBe(WorkflowStatus.COMPLETED);
+
+    expect(capturedRunStatus).toBe(WorkflowStatus.RUNNING);
+
+    await engine.stop();
+  }, 30000);
+
   it('middleware errors should propagate and trigger retries', async () => {
     let callCount = 0;
 
