@@ -189,6 +189,175 @@ describe('Lifecycle Hooks', () => {
     await engine.stop();
   }, 30000);
 
+  it('should not call onStart on retries', async () => {
+    const onStart = vi.fn();
+    let attempts = 0;
+
+    const wf = workflow(
+      'hooks-no-start-retry',
+      async ({ step }) => {
+        return await step.run('s1', async () => {
+          attempts++;
+          if (attempts < 3) throw new Error('fail');
+          return 'done';
+        });
+      },
+      { retries: 3, onStart },
+    );
+
+    const engine = new WorkflowEngine({ boss: testBoss, workflows: [wf] });
+    await engine.start();
+
+    const run = await engine.startWorkflow({
+      workflowId: 'hooks-no-start-retry',
+      input: {},
+    });
+
+    await expect
+      .poll(
+        async () => {
+          const r = await engine.getRun({ runId: run.id });
+          return r.status;
+        },
+        { timeout: 15000 },
+      )
+      .toBe(WorkflowStatus.COMPLETED);
+
+    expect(attempts).toBe(3);
+    expect(onStart).toHaveBeenCalledOnce(); // only on first execution, not retries
+
+    await engine.stop();
+  }, 30000);
+
+  it('should only fire relevant hooks for a successful workflow', async () => {
+    const onStart = vi.fn();
+    const onSuccess = vi.fn();
+    const onFailure = vi.fn();
+    const onComplete = vi.fn();
+    const onCancel = vi.fn();
+
+    const wf = workflow(
+      'hooks-all-success',
+      async ({ step }) => {
+        return await step.run('s1', async () => 'ok');
+      },
+      { onStart, onSuccess, onFailure, onComplete, onCancel },
+    );
+
+    const engine = new WorkflowEngine({ boss: testBoss, workflows: [wf] });
+    await engine.start();
+
+    const run = await engine.startWorkflow({
+      workflowId: 'hooks-all-success',
+      input: {},
+    });
+
+    await expect
+      .poll(
+        async () => {
+          const r = await engine.getRun({ runId: run.id });
+          return r.status;
+        },
+        { timeout: 10000 },
+      )
+      .toBe(WorkflowStatus.COMPLETED);
+
+    expect(onStart).toHaveBeenCalledOnce();
+    expect(onSuccess).toHaveBeenCalledOnce();
+    expect(onComplete).toHaveBeenCalledOnce();
+    expect(onFailure).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+
+    await engine.stop();
+  }, 30000);
+
+  it('should only fire relevant hooks for a failed workflow', async () => {
+    const onStart = vi.fn();
+    const onSuccess = vi.fn();
+    const onFailure = vi.fn();
+    const onComplete = vi.fn();
+    const onCancel = vi.fn();
+
+    const wf = workflow(
+      'hooks-all-failure',
+      async ({ step }) => {
+        return await step.run('s1', async () => {
+          throw new Error('boom');
+        });
+      },
+      { retries: 0, onStart, onSuccess, onFailure, onComplete, onCancel },
+    );
+
+    const engine = new WorkflowEngine({ boss: testBoss, workflows: [wf] });
+    await engine.start();
+
+    const run = await engine.startWorkflow({
+      workflowId: 'hooks-all-failure',
+      input: {},
+    });
+
+    await expect
+      .poll(
+        async () => {
+          const r = await engine.getRun({ runId: run.id });
+          return r.status;
+        },
+        { timeout: 10000 },
+      )
+      .toBe(WorkflowStatus.FAILED);
+
+    expect(onStart).toHaveBeenCalledOnce();
+    expect(onFailure).toHaveBeenCalledOnce();
+    expect(onComplete).toHaveBeenCalledOnce();
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+
+    await engine.stop();
+  }, 30000);
+
+  it('should provide run object with correct status in hook context', async () => {
+    let successRunStatus: string | undefined;
+    let completeRunStatus: string | undefined;
+
+    const wf = workflow(
+      'hooks-run-status',
+      async ({ step }) => {
+        return await step.run('s1', async () => 'ok');
+      },
+      {
+        onSuccess: (ctx) => {
+          successRunStatus = ctx.run.status;
+        },
+        onComplete: (ctx) => {
+          completeRunStatus = ctx.run.status;
+        },
+      },
+    );
+
+    const engine = new WorkflowEngine({ boss: testBoss, workflows: [wf] });
+    await engine.start();
+
+    const run = await engine.startWorkflow({
+      workflowId: 'hooks-run-status',
+      input: {},
+    });
+
+    await expect
+      .poll(
+        async () => {
+          const r = await engine.getRun({ runId: run.id });
+          return r.status;
+        },
+        { timeout: 10000 },
+      )
+      .toBe(WorkflowStatus.COMPLETED);
+
+    expect(successRunStatus).toBe(WorkflowStatus.COMPLETED);
+    expect(completeRunStatus).toBe(WorkflowStatus.COMPLETED);
+
+    await engine.stop();
+  }, 30000);
+
   it('should call onCancel when workflow is cancelled', async () => {
     const onCancel = vi.fn();
 
