@@ -619,8 +619,12 @@ export class WorkflowEngine {
       : undefined;
 
     try {
-      if (run.status === WorkflowStatus.CANCELLED) {
-        this.logger.log(`Workflow run ${runId} is cancelled, skipping`);
+      if (
+        run.status === WorkflowStatus.CANCELLED ||
+        run.status === WorkflowStatus.FAILED ||
+        run.status === WorkflowStatus.COMPLETED
+      ) {
+        this.logger.log(`Workflow run ${runId} is ${run.status}, skipping`);
         return;
       }
 
