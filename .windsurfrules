@@ -45,10 +45,8 @@ const myWorkflow = workflow(
     inputSchema: z.object({ data: z.string() }),
     timeout: 60000,
     retries: 3,
-    cron: {                                    // optional, cron scheduling
-      expression: '*/15 * * * *',
-      timezone: 'America/New_York',           // optional, defaults to UTC
-    },
+    cron: '*/15 * * * *',                         // cron expression string (UTC)
+    // or: cron: { expression: '*/15 * * * *', timezone: 'America/New_York' },
   }
 );
 ```
@@ -82,7 +80,7 @@ await engine.start();
 - `engine.triggerEvent({ runId, resourceId?, eventName, data? })` - Send event to waiting workflow
 - `engine.getRun({ runId, resourceId? })` - Get run details
 - `engine.checkProgress({ runId, resourceId? })` - Get progress percentage
-- `engine.getRuns({ resourceId?, statuses?, workflowId?, triggerSource?, limit? })` - List runs (cursor pagination)
+- `engine.getRuns({ resourceId?, statuses?, workflowId?, limit? })` - List runs (cursor pagination)
 - `engine.registerWorkflow(definition)` - Register a workflow dynamically
 - `engine.unregisterWorkflow(workflowId)` - Unregister a workflow
 
@@ -102,10 +100,11 @@ enum StepType { PAUSE = 'pause', RUN = 'run', WAIT_FOR = 'waitFor', WAIT_UNTIL =
 
 Workflows can run on a cron schedule via the `cron` option on `workflow()`. Uses pg-boss `schedule()` under the hood.
 
+- `cron` option accepts a string (`'*/15 * * * *'`) or object (`{ expression, timezone? }`)
 - `CronConfig`: `{ expression: string, timezone?: string }`
-- `ScheduleContext`: `{ timestamp: Date, lastTimestamp: Date | undefined, timezone: string }` — available as `schedule` on workflow context for cron-triggered runs
-- `triggerSource`: `'api' | 'cron'` field on `WorkflowRun` distinguishes how a run was triggered
-- `scheduleContext`: persisted on `WorkflowRun` for cron runs (survives retries)
+- `ScheduleContext`: `{ timestamp: Date, lastTimestamp: Date | undefined, timezone: string }` — available as `schedule` on workflow context for cron-triggered runs. Built at runtime from `run.createdAt` and latest completed run.
+- `WorkflowRun` stores `cron: string | null` and `timezone: string | null` as flat columns (no nested JSON)
+- Cron-triggered runs are identified by `cron !== null` on the `WorkflowRun`
 - Post-start registration: `registerWorkflow()` after `start()` automatically sets up cron schedule
 
 ## AI & Agent Workflows

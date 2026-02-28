@@ -25,8 +25,8 @@ type WorkflowRunRow = {
   retry_count: number;
   max_retries: number;
   job_id: string | null;
-  trigger_source: 'api' | 'cron';
-  schedule_context: string | { timestamp: string; lastTimestamp?: string; timezone: string } | null;
+  cron: string | null;
+  timezone: string | null;
 };
 
 function mapRowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
@@ -54,20 +54,8 @@ function mapRowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
     retryCount: row.retry_count,
     maxRetries: row.max_retries,
     jobId: row.job_id,
-    triggerSource: row.trigger_source,
-    scheduleContext: row.schedule_context
-      ? (() => {
-          const sc =
-            typeof row.schedule_context === 'string'
-              ? JSON.parse(row.schedule_context)
-              : row.schedule_context;
-          return {
-            timestamp: new Date(sc.timestamp),
-            lastTimestamp: sc.lastTimestamp ? new Date(sc.lastTimestamp) : undefined,
-            timezone: sc.timezone,
-          };
-        })()
-      : null,
+    cron: row.cron,
+    timezone: row.timezone,
   };
 }
 
@@ -80,8 +68,8 @@ export async function insertWorkflowRun(
     input,
     maxRetries,
     timeoutAt,
-    triggerSource,
-    scheduleContext,
+    cron,
+    timezone,
   }: {
     resourceId?: string;
     workflowId: string;
@@ -90,8 +78,8 @@ export async function insertWorkflowRun(
     input: unknown;
     maxRetries: number;
     timeoutAt: Date | null;
-    triggerSource?: 'api' | 'cron';
-    scheduleContext?: { timestamp: Date; lastTimestamp: Date | undefined; timezone: string };
+    cron?: string;
+    timezone?: string;
   },
   db: Db,
 ): Promise<WorkflowRun> {
@@ -100,20 +88,20 @@ export async function insertWorkflowRun(
 
   const result = await db.executeSql(
     `INSERT INTO workflow_runs (
-      id, 
-      resource_id, 
-      workflow_id, 
-      current_step_id, 
-      status, 
-      input, 
-      max_retries, 
+      id,
+      resource_id,
+      workflow_id,
+      current_step_id,
+      status,
+      input,
+      max_retries,
       timeout_at,
       created_at,
       updated_at,
       timeline,
       retry_count,
-      trigger_source,
-      schedule_context
+      cron,
+      timezone
     )
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
     RETURNING *`,
@@ -130,8 +118,8 @@ export async function insertWorkflowRun(
       now,
       '{}',
       0,
-      triggerSource ?? 'api',
-      scheduleContext ? JSON.stringify(scheduleContext) : null,
+      cron ?? null,
+      timezone ?? null,
     ],
   );
 
@@ -179,24 +167,24 @@ export async function getWorkflowRun(
   return mapRowToWorkflowRun(run);
 }
 
-export async function getLastCronCompletedAt(
+export async function getWorkflowLastRun(
   workflowId: string,
   db: Db,
-): Promise<Date | undefined> {
+): Promise<WorkflowRun | undefined> {
   const result = await db.executeSql(
-    `SELECT completed_at FROM workflow_runs
-     WHERE workflow_id = $1 AND status = 'completed' AND trigger_source = 'cron'
+    `SELECT * FROM workflow_runs
+     WHERE workflow_id = $1 AND status = 'completed'
      ORDER BY completed_at DESC
      LIMIT 1`,
     [workflowId],
   );
 
   const row = result.rows[0];
-  if (!row?.completed_at) {
+  if (!row) {
     return undefined;
   }
 
-  return typeof row.completed_at === 'string' ? new Date(row.completed_at) : row.completed_at;
+  return mapRowToWorkflowRun(row);
 }
 
 export async function updateWorkflowRun(
@@ -302,7 +290,6 @@ export async function getWorkflowRuns(
     limit = 20,
     statuses,
     workflowId,
-    triggerSource,
   }: {
     resourceId?: string;
     startingAfter?: string | null;
@@ -310,7 +297,6 @@ export async function getWorkflowRuns(
     limit?: number;
     statuses?: string[];
     workflowId?: string;
-    triggerSource?: 'api' | 'cron';
   },
   db: Db,
 ): Promise<{
@@ -339,12 +325,6 @@ export async function getWorkflowRuns(
   if (workflowId) {
     conditions.push(`workflow_id = $${paramIndex}`);
     values.push(workflowId);
-    paramIndex++;
-  }
-
-  if (triggerSource) {
-    conditions.push(`trigger_source = $${paramIndex}`);
-    values.push(triggerSource);
     paramIndex++;
   }
 

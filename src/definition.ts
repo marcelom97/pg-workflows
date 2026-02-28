@@ -21,7 +21,7 @@ function createWorkflowFactory<TStepExt extends object = object>(
     inputSchema,
     timeout,
     retries,
-    cron,
+    cron: typeof cron === 'string' ? { expression: cron } : cron,
     plugins: plugins.length > 0 ? (plugins as WorkflowPlugin[]) : undefined,
   })) as WorkflowFactory<TStepExt>;
 

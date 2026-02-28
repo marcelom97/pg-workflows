@@ -40,7 +40,7 @@ export type WorkflowOptions<I extends InputParameters> = {
   timeout?: number;
   retries?: number;
   inputSchema?: I;
-  cron?: CronConfig;
+  cron?: string | CronConfig;
 };
 
 export type StepBaseContext = {

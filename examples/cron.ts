@@ -42,10 +42,7 @@ const syncOrders = workflow(
     };
   },
   {
-    cron: {
-      expression: '*/1 * * * *', // every 1 minute for demo purposes
-      timezone: 'Europe/Athens', // optional timezone for cron scheduling
-    },
+    cron: { expression: '* * * * *', timezone: 'Europe/Athens' },
     retries: 3,
   },
 );
