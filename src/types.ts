@@ -35,7 +35,7 @@ export type WorkflowOptions<I extends Parameters> = {
   timeout?: number;
   retries?: number;
   inputSchema?: I;
-  cron?: CronConfig;
+  cron?: string | CronConfig;
 };
 
 export interface WorkflowLogger {

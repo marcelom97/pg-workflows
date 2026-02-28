@@ -17,6 +17,6 @@ export type WorkflowRun = {
   retryCount: number;
   maxRetries: number;
   jobId: string | null;
-  triggerSource: 'api' | 'cron';
-  scheduleContext: { timestamp: Date; lastTimestamp: Date | undefined; timezone: string } | null;
+  cron: string | null;
+  timezone: string | null;
 };

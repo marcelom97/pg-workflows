@@ -71,10 +71,8 @@ const myWorkflow = workflow(
     inputSchema: z.object({ /* ... */ }),      // optional Zod schema
     timeout: 60000,                            // optional, milliseconds
     retries: 3,                                // optional, max retry count
-    cron: {                                    // optional, cron scheduling
-      expression: '*/15 * * * *',             // standard cron expression
-      timezone: 'America/New_York',           // optional, defaults to UTC
-    },
+    cron: '*/15 * * * *',                         // cron expression string (UTC)
+    // or: cron: { expression: '*/15 * * * *', timezone: 'America/New_York' },
   }
 );
 ```
@@ -156,7 +154,6 @@ const { items, nextCursor, hasMore } = await engine.getRuns({
   resourceId: 'user-123',
   statuses: [WorkflowStatus.RUNNING],
   workflowId: 'workflow-id',
-  triggerSource: 'cron',              // optional, filter by 'api' or 'cron'
   limit: 20,
   startingAfter: cursor,
 });
@@ -205,8 +202,8 @@ type WorkflowRun = {
   retryCount: number;
   maxRetries: number;
   jobId: string | null;
-  triggerSource: 'api' | 'cron';
-  scheduleContext: { timestamp: Date; lastTimestamp: Date | undefined; timezone: string } | null;
+  cron: string | null;
+  timezone: string | null;
 };
 
 type WorkflowRunProgress = WorkflowRun & {
@@ -238,16 +235,24 @@ Workflows can be scheduled to run on a cron expression using the `cron` option. 
 
 ### CronConfig
 
+The `cron` option accepts a string or an object:
+
 ```typescript
+// String shorthand (defaults to UTC)
+cron: '*/15 * * * *'
+
+// Object with explicit timezone
+cron: { expression: '*/15 * * * *', timezone: 'America/New_York' }
+
 type CronConfig = {
-  expression: string;     // standard cron expression (e.g., '*/15 * * * *')
+  expression: string;     // standard cron expression
   timezone?: string;      // IANA timezone, defaults to 'UTC'
 };
 ```
 
 ### ScheduleContext
 
-Cron-triggered runs receive a `schedule` object on the workflow context:
+Cron-triggered runs receive a `schedule` object on the workflow context. The `timestamp` is derived from `run.createdAt` and `lastTimestamp` is queried from the latest completed run at execution time.
 
 ```typescript
 type ScheduleContext = {
@@ -266,7 +271,7 @@ const sync = workflow('sync-data', async ({ step, schedule, logger }) => {
   await step.run('write', async () => writeToDB(data));
   return { synced: data.length };
 }, {
-  cron: { expression: '*/15 * * * *', timezone: 'UTC' },
+  cron: '*/15 * * * *',  // every 15 minutes, UTC
   retries: 3,
 });
 ```

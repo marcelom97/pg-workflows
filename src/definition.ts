@@ -17,6 +17,6 @@ export function workflow<I extends Parameters>(
     inputSchema,
     timeout,
     retries,
-    cron,
+    cron: typeof cron === 'string' ? { expression: cron } : cron,
   };
 }

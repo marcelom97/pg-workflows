@@ -5,7 +5,7 @@ import type { z } from 'zod';
 import { parseWorkflowHandler } from './ast-parser';
 import { runMigrations } from './db/migration';
 import {
-  getLastCronCompletedAt,
+  getWorkflowLastRun,
   getWorkflowRun,
   getWorkflowRuns,
   insertWorkflowRun,
@@ -146,7 +146,7 @@ export class WorkflowEngine {
       for (const wf of this.workflows.values()) {
         if (wf.cron) {
           try {
-            await this.setupCronSchedule(wf);
+            await this.scheduleCronWorkflow(wf);
           } catch (error) {
             this.logger.error(
               `Failed to set up cron schedule for "${wf.id}", skipping`,
@@ -224,7 +224,7 @@ export class WorkflowEngine {
     if (this._started && definition.cron) {
       const internalDef = this.workflows.get(definition.id);
       if (internalDef) {
-        await this.setupCronSchedule(internalDef);
+        await this.scheduleCronWorkflow(internalDef);
       }
     }
 
@@ -241,34 +241,29 @@ export class WorkflowEngine {
     return this;
   }
 
-  private async buildScheduleContext(
-    wf: WorkflowDefinition,
-    timestamp: Date,
-  ): Promise<ScheduleContext> {
-    const lastTimestamp = await getLastCronCompletedAt(wf.id, this.boss.getDb());
+  private async buildScheduleContext(run: WorkflowRun): Promise<ScheduleContext> {
+    const lastRun = await getWorkflowLastRun(run.workflowId, this.boss.getDb());
     return {
-      timestamp,
-      lastTimestamp,
-      timezone: wf.cron?.timezone ?? 'UTC',
+      timestamp: run.createdAt,
+      lastTimestamp: lastRun?.completedAt ?? undefined,
+      timezone: run.timezone ?? 'UTC',
     };
   }
 
-  private async setupCronSchedule(wf: InternalWorkflowDefinition): Promise<void> {
+  private async scheduleCronWorkflow(wf: InternalWorkflowDefinition): Promise<void> {
     if (!wf.cron) return;
 
     await this.boss.createQueue(wf.id);
     await this.boss.schedule(wf.id, wf.cron.expression, null, {
       tz: wf.cron.timezone ?? 'UTC',
     });
-    await this.boss.work(wf.id, { includeMetadata: true }, async ([job]: JobWithMetadata[]) => {
+    await this.boss.work(wf.id, { includeMetadata: true }, async ([_job]: JobWithMetadata[]) => {
       try {
-        const cronTimestamp = job?.startAfter ?? new Date();
-        const scheduleContext = await this.buildScheduleContext(wf, cronTimestamp);
         await this._createWorkflowRun({
           workflowId: wf.id,
           input: {},
-          triggerSource: 'cron',
-          scheduleContext,
+          cron: wf.cron?.expression,
+          timezone: wf.cron?.timezone,
         });
       } catch (error) {
         this.logger.error(
@@ -302,7 +297,6 @@ export class WorkflowEngine {
       workflowId,
       input,
       options,
-      triggerSource: 'api',
     });
   }
 
@@ -311,14 +305,14 @@ export class WorkflowEngine {
     workflowId,
     input,
     options,
-    triggerSource = 'api',
-    scheduleContext,
+    cron,
+    timezone,
   }: {
     resourceId?: string;
     workflowId: string;
     input: unknown;
-    triggerSource?: 'api' | 'cron';
-    scheduleContext?: ScheduleContext;
+    cron?: string;
+    timezone?: string;
     options?: {
       timeout?: number;
       retries?: number;
@@ -363,8 +357,8 @@ export class WorkflowEngine {
           input,
           maxRetries: options?.retries ?? workflow.retries ?? 0,
           timeoutAt,
-          triggerSource,
-          scheduleContext,
+          cron,
+          timezone,
         },
         this.boss.getDb(),
       );
@@ -611,12 +605,8 @@ export class WorkflowEngine {
 
     let run = await this.getRun({ runId, resourceId });
 
-    const schedule: ScheduleContext | undefined = run.scheduleContext
-      ? {
-          timestamp: run.scheduleContext.timestamp,
-          lastTimestamp: run.scheduleContext.lastTimestamp ?? undefined,
-          timezone: run.scheduleContext.timezone,
-        }
+    const schedule: ScheduleContext | undefined = run.cron
+      ? await this.buildScheduleContext(run)
       : undefined;
 
     try {
@@ -1042,7 +1032,6 @@ export class WorkflowEngine {
     limit = 20,
     statuses,
     workflowId,
-    triggerSource,
   }: {
     resourceId?: string;
     startingAfter?: string | null;
@@ -1050,7 +1039,6 @@ export class WorkflowEngine {
     limit?: number;
     statuses?: WorkflowStatus[];
     workflowId?: string;
-    triggerSource?: 'api' | 'cron';
   }): Promise<{
     items: WorkflowRun[];
     nextCursor: string | null;
@@ -1066,7 +1054,6 @@ export class WorkflowEngine {
         limit,
         statuses,
         workflowId,
-        triggerSource,
       },
       this.db,
     );

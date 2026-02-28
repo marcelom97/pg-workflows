@@ -946,12 +946,59 @@ describe('WorkflowEngine', () => {
           await step.run('step-1', async () => 'done');
         },
         {
-          cron: { expression: 'not-a-valid-cron' },
+          cron: { expression: '60 * * * *' },
         },
       );
 
       await expect(engine.registerWorkflow(invalidCronWf)).rejects.toThrow(WorkflowEngineError);
       await expect(engine.registerWorkflow(invalidCronWf)).rejects.toThrow(/invalid cron/i);
+
+      await engine.stop();
+    });
+
+    it('should normalize string cron shorthand to CronConfig', async () => {
+      const engine = new WorkflowEngine({
+        boss: testBoss,
+      });
+      await engine.start(false);
+
+      const stringWf = workflow(
+        'string-cron-wf',
+        async ({ step }) => {
+          await step.run('step-1', async () => 'done');
+        },
+        {
+          cron: '*/5 * * * *',
+        },
+      );
+
+      await engine.registerWorkflow(stringWf);
+      const registered = engine.workflows.get('string-cron-wf');
+      expect(registered?.cron?.expression).toBe('*/5 * * * *');
+      expect(registered?.cron?.timezone).toBeUndefined();
+
+      await engine.stop();
+    });
+
+    it('should pass through standard cron expressions unchanged', async () => {
+      const engine = new WorkflowEngine({
+        boss: testBoss,
+      });
+      await engine.start(false);
+
+      const standardWf = workflow(
+        'standard-cron-wf',
+        async ({ step }) => {
+          await step.run('step-1', async () => 'done');
+        },
+        {
+          cron: '*/15 * * * *',
+        },
+      );
+
+      await engine.registerWorkflow(standardWf);
+      const registered = engine.workflows.get('standard-cron-wf');
+      expect(registered?.cron?.expression).toBe('*/15 * * * *');
 
       await engine.stop();
     });
@@ -1164,7 +1211,7 @@ describe('WorkflowEngine', () => {
       await engine.stop();
     });
 
-    it('should not expose scheduleContext on public startWorkflow API', async () => {
+    it('should not expose schedule context on public startWorkflow API', async () => {
       let capturedSchedule: ScheduleContext | undefined;
 
       const cronWf = workflow(
@@ -1247,7 +1294,7 @@ describe('WorkflowEngine', () => {
         .toBe('completed');
 
       // API-triggered run: schedule should be undefined, confirming
-      // it's read from the run record (which has null scheduleContext for API runs)
+      // it's derived from the run record (which has null cron column for API runs)
       expect(capturedSchedule).toBeUndefined();
 
       // Verify the run completed after retry (attemptCount should be 2)
@@ -1276,7 +1323,7 @@ describe('WorkflowEngine', () => {
       });
       await engine.start();
 
-      // Start via public API (triggerSource='api')
+      // Start via public API — no cron field
       const run1 = await engine.startWorkflow({
         workflowId: 'cron-lasttimestamp-v2-test',
         input: {},
@@ -1325,7 +1372,7 @@ describe('WorkflowEngine', () => {
       await engine.stop();
     });
 
-    it('should filter runs by triggerSource in getRuns()', async () => {
+    it('should distinguish api and cron runs via cron field', async () => {
       const cronFilterWf = workflow(
         'cron-filter-test',
         async ({ step }) => {
@@ -1342,7 +1389,7 @@ describe('WorkflowEngine', () => {
       });
       await engine.start();
 
-      // Start via public API (triggerSource = 'api')
+      // Start via public API — cron field should be null
       const apiRun = await engine.startWorkflow({
         workflowId: 'cron-filter-test',
         input: {},
@@ -1355,20 +1402,8 @@ describe('WorkflowEngine', () => {
         })
         .toBe('completed');
 
-      // Filter by 'api' — should find it
-      const apiRuns = await engine.getRuns({
-        workflowId: 'cron-filter-test',
-        triggerSource: 'api',
-      });
-      expect(apiRuns.items.length).toBeGreaterThanOrEqual(1);
-      expect(apiRuns.items.every((r) => r.triggerSource === 'api')).toBe(true);
-
-      // Filter by 'cron' — should find none (we only started via API)
-      const cronRuns = await engine.getRuns({
-        workflowId: 'cron-filter-test',
-        triggerSource: 'cron',
-      });
-      expect(cronRuns.items.length).toBe(0);
+      const completedRun = await engine.getRun({ runId: apiRun.id });
+      expect(completedRun.cron).toBeNull();
 
       await engine.stop();
     });
@@ -1402,7 +1437,6 @@ describe('WorkflowEngine', () => {
           async () => {
             const runs = await engine.getRuns({
               workflowId: 'cron-integration-test',
-              triggerSource: 'cron',
               statuses: [WorkflowStatus.COMPLETED],
             });
             return runs.items.length;
@@ -1418,13 +1452,13 @@ describe('WorkflowEngine', () => {
       // First cron run — no previous completion
       expect(capturedSchedule?.lastTimestamp).toBeUndefined();
 
-      // Verify the run record
+      // Verify the run record has cron and timezone columns
       const cronRuns = await engine.getRuns({
         workflowId: 'cron-integration-test',
-        triggerSource: 'cron',
       });
-      expect(cronRuns.items[0]?.triggerSource).toBe('cron');
-      expect(cronRuns.items[0]?.scheduleContext).toBeDefined();
+      const cronRun = cronRuns.items.find((r) => r.cron !== null);
+      expect(cronRun?.cron).toBe('* * * * *');
+      expect(cronRun?.timezone).toBe('America/New_York');
 
       await engine.stop();
     });

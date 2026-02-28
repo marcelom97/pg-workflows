@@ -34,8 +34,8 @@ export async function runMigrations(db: Db): Promise<void> {
         retry_count integer DEFAULT 0 NOT NULL,
         max_retries integer DEFAULT 0 NOT NULL,
         job_id varchar(256),
-        trigger_source text DEFAULT 'api' NOT NULL,
-        schedule_context jsonb
+        cron text,
+        timezone text
       );
     `,
       [],
@@ -65,42 +65,25 @@ export async function runMigrations(db: Db): Promise<void> {
     await db.executeSql(
       `CREATE INDEX idx_workflow_runs_cron_completed
        ON workflow_runs (workflow_id, completed_at DESC)
-       WHERE trigger_source = 'cron' AND status = 'completed';`,
+       WHERE cron IS NOT NULL AND status = 'completed';`,
       [],
     );
   }
 
-  // Migration: add trigger_source column for existing tables
-  const triggerSourceExists = await db.executeSql(
+  // Migration: add cron and timezone columns for existing tables
+  const cronColumnExists = await db.executeSql(
     `SELECT EXISTS (
       SELECT FROM information_schema.columns
       WHERE table_schema = current_schema()
       AND table_name = 'workflow_runs'
-      AND column_name = 'trigger_source'
+      AND column_name = 'cron'
     );`,
     [],
   );
 
-  if (!triggerSourceExists.rows[0]?.exists) {
-    await db.executeSql(
-      `ALTER TABLE workflow_runs ADD COLUMN trigger_source text DEFAULT 'api' NOT NULL;`,
-      [],
-    );
-  }
-
-  // Migration: add schedule_context column for existing tables
-  const scheduleContextExists = await db.executeSql(
-    `SELECT EXISTS (
-      SELECT FROM information_schema.columns
-      WHERE table_schema = current_schema()
-      AND table_name = 'workflow_runs'
-      AND column_name = 'schedule_context'
-    );`,
-    [],
-  );
-
-  if (!scheduleContextExists.rows[0]?.exists) {
-    await db.executeSql(`ALTER TABLE workflow_runs ADD COLUMN schedule_context jsonb;`, []);
+  if (!cronColumnExists.rows[0]?.exists) {
+    await db.executeSql(`ALTER TABLE workflow_runs ADD COLUMN cron text;`, []);
+    await db.executeSql(`ALTER TABLE workflow_runs ADD COLUMN timezone text;`, []);
   }
 
   // Migration: add cron-specific indexes
@@ -116,7 +99,7 @@ export async function runMigrations(db: Db): Promise<void> {
     await db.executeSql(
       `CREATE INDEX idx_workflow_runs_cron_completed
        ON workflow_runs (workflow_id, completed_at DESC)
-       WHERE trigger_source = 'cron' AND status = 'completed';`,
+       WHERE cron IS NOT NULL AND status = 'completed';`,
       [],
     );
   }
