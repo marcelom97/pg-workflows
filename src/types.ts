@@ -34,7 +34,11 @@ export type StepBaseContext = {
     stepId: string,
     { eventName, timeout, schema }: { eventName: string; timeout?: number; schema?: T },
   ) => Promise<InferInputParameters<T>>;
-  waitUntil: (stepId: string, { date }: { date: Date }) => Promise<void>;
+  waitUntil: {
+    (stepId: string, date: Date): Promise<void>;
+    (stepId: string, dateString: string): Promise<void>;
+    (stepId: string, options: { date: Date | string }): Promise<void>;
+  };
   pause: (stepId: string) => Promise<void>;
 };
 

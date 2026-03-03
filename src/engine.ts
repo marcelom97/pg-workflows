@@ -582,10 +582,21 @@ export class WorkflowEngine {
             timeout,
           }) as Promise<InferInputParameters<T>>;
         },
-        waitUntil: async (stepId: string, { date }: { date: Date }) => {
+        waitUntil: async (
+          stepId: string,
+          dateOrOptions: Date | string | { date: Date | string },
+        ) => {
           if (!run) {
             throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
           }
+          const date =
+            dateOrOptions instanceof Date
+              ? dateOrOptions
+              : typeof dateOrOptions === 'string'
+                ? new Date(dateOrOptions)
+                : dateOrOptions.date instanceof Date
+                  ? dateOrOptions.date
+                  : new Date(dateOrOptions.date);
           await this.waitUntilDate({
             run,
             stepId,
@@ -616,7 +627,63 @@ export class WorkflowEngine {
         runId: run.id,
         timeline: run.timeline,
         logger: this.logger,
-        step,
+        step: {
+          run: async <T>(stepId: string, handler: () => Promise<T>) => {
+            if (!run) {
+              throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
+            }
+
+            return this.runStep({
+              stepId,
+              run,
+              handler,
+            }) as Promise<T>;
+          },
+          waitFor: async <T extends InputParameters>(
+            stepId: string,
+            { eventName, timeout }: { eventName: string; timeout?: number; schema?: T },
+          ) => {
+            if (!run) {
+              throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
+            }
+            return this.waitForEvent({
+              run,
+              stepId,
+              eventName,
+              timeout,
+            }) as Promise<InferInputParameters<T>>;
+          },
+          waitUntil: async (
+            stepId: string,
+            dateOrOptions: Date | string | { date: Date | string },
+          ) => {
+            if (!run) {
+              throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
+            }
+            const date =
+              dateOrOptions instanceof Date
+                ? dateOrOptions
+                : typeof dateOrOptions === 'string'
+                  ? new Date(dateOrOptions)
+                  : dateOrOptions.date instanceof Date
+                    ? dateOrOptions.date
+                    : new Date(dateOrOptions.date);
+            await this.waitUntilDate({
+              run,
+              stepId,
+              date,
+            });
+          },
+          pause: async (stepId: string) => {
+            if (!run) {
+              throw new WorkflowEngineError('Missing workflow run', workflowId, runId);
+            }
+            return this.pauseStep({
+              stepId,
+              run,
+            });
+          },
+        },
       };
 
       const result = await workflow.handler(context);
@@ -896,15 +963,26 @@ export class WorkflowEngine {
       },
     };
 
-    await this.boss.send(WORKFLOW_RUN_QUEUE_NAME, job, {
-      startAfter: date,
-      expireInSeconds: defaultExpireInSeconds,
-    });
-
-    this.logger.log(`Running step ${stepId}, waiting until ${date.toISOString()}...`, {
-      runId: run.id,
-      workflowId: run.workflowId,
-    });
+    const now = Date.now();
+    const isPast = date.getTime() <= now;
+    if (isPast) {
+      await this.boss.send(WORKFLOW_RUN_QUEUE_NAME, job, {
+        expireInSeconds: defaultExpireInSeconds,
+      });
+      this.logger.log(`Running step ${stepId}, date ${date.toISOString()} is in the past, executing immediately`, {
+        runId: run.id,
+        workflowId: run.workflowId,
+      });
+    } else {
+      await this.boss.send(WORKFLOW_RUN_QUEUE_NAME, job, {
+        startAfter: date,
+        expireInSeconds: defaultExpireInSeconds,
+      });
+      this.logger.log(`Running step ${stepId}, waiting until ${date.toISOString()}...`, {
+        runId: run.id,
+        workflowId: run.workflowId,
+      });
+    }
   }
 
   private async checkIfHasStarted(): Promise<void> {
