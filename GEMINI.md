@@ -42,6 +42,10 @@ examples/
 - `npm run lint:fix` - Auto-fix lint issues
 - `npm run format` - Format with Biome
 
+## Dependencies (npm)
+
+- **Always use the latest npm libraries.** When adding or updating dependencies, look up the current latest version on npm (e.g. npmjs.com or `npm view <pkg> version`) and use that. Prefer `^<latest>` or an explicit latest version in `package.json`. Do not pin to outdated major/minor versions unless the project explicitly requires it.
+
 ## Code Conventions
 
 - **Linter/Formatter:** Biome (not ESLint/Prettier)
