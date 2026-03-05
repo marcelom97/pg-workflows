@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "tsx basic.ts",
-    "start:bun": "bun run basic.ts"
+    "start": "dotenvx run -- tsx basic.ts",
+    "example:basic": "dotenvx run -- tsx basic.ts",
+    "example:approval-flow": "dotenvx run -- tsx approval-flow.ts"
   },
   "dependencies": {
     "pg": "^8.13.1",
@@ -13,6 +14,7 @@
     "pg-workflows": "~0.1.0"
   },
   "devDependencies": {
+    "@dotenvx/dotenvx": "^1.52.0",
     "tsx": "^4.19.0",
     "@types/pg": "^8.11.10"
   }

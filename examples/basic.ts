@@ -1,6 +1,6 @@
 import pg from 'pg';
 import { PgBoss } from 'pg-boss';
-import { WorkflowEngine, workflow } from 'pg-workflows';
+import { WorkflowEngine, type WorkflowRunProgress, workflow } from 'pg-workflows';
 
 // 1. Define a workflow
 const onboardUser = workflow('onboard-user', async ({ step, input }) => {
@@ -45,26 +45,16 @@ async function main() {
     input: { email: 'alice@example.com' },
   });
 
-  console.log('Workflow started:', run.id);
-
   // 4. Poll for completion
-  let progress = await engine.checkProgress({
-    runId: run.id,
-    resourceId: 'tenant_1',
-  });
+  let progress: WorkflowRunProgress;
 
-  while (progress.status === 'running') {
-    await new Promise((r) => setTimeout(r, 1000));
-    progress = await engine.checkProgress({
-      runId: run.id,
-      resourceId: 'tenant_1',
-    });
+  do {
+    await new Promise((r) => setTimeout(r, 1000))
+    progress = await engine.checkProgress({ runId: run.id, resourceId: 'tenant_1' })
     console.log(
       `Progress: ${progress.completionPercentage}% (${progress.completedSteps}/${progress.totalSteps} steps)`,
-    );
-  }
-
-  console.log('Workflow finished:', progress.status, progress.output);
+    )
+  } while (progress.status === 'running')
 
   await engine.stop();
   await pool.end();
