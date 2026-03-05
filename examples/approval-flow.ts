@@ -19,7 +19,7 @@ const approvalWorkflow = workflow('approval-workflow', async ({ step, input }) =
     return { published: true };
   });
 
-  return { draftId: draft?.id, status: 'published', approvedBy: approval.approved };
+  return { draftId: draft?.id, status: 'published', approvedBy: approval?.approved };
 });
 
 // 2. Start the engine
