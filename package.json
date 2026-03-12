@@ -70,11 +70,14 @@
     "ksuid": "^3.0.0",
     "parse-duration": "^2.1.5",
     "pg": "^8.13.1",
-    "pg-boss": ">=12.0.0",
     "typescript": "^5.9.3",
     "zod": "^3.24.0"
   },
+  "peerDependencies": {
+    "pg-boss": ">=12.0.0"
+  },
   "devDependencies": {
+    "pg-boss": ">=12.0.0",
     "@biomejs/biome": "^2.3.10",
     "@electric-sql/pglite": "^0.3.14",
     "@types/node": "^22.10.2",
