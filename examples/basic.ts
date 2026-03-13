@@ -1,5 +1,3 @@
-import pg from 'pg';
-import { PgBoss } from 'pg-boss';
 import { WorkflowEngine, type WorkflowRunProgress, workflow } from 'pg-workflows';
 
 // 1. Define a workflow
@@ -26,13 +24,8 @@ const onboardUser = workflow('onboard-user', async ({ step, input }) => {
 async function main() {
   const DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://localhost:5432/pg_workflows_example';
 
-  const pool = new pg.Pool({ connectionString: DATABASE_URL });
-  const boss = new PgBoss({
-    db: { executeSql: (text, values) => pool.query(text, values) },
-  });
-
   const engine = new WorkflowEngine({
-    boss,
+    connectionString: DATABASE_URL,
     workflows: [onboardUser],
   });
 
@@ -57,7 +50,6 @@ async function main() {
   } while (progress.status === 'running');
 
   await engine.stop();
-  await pool.end();
 }
 
 main().catch((err) => {

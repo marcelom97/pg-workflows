@@ -114,6 +114,7 @@ async function migratePgBoss(db: PGlite): Promise<void> {
         active_count int NOT NULL default 0,
         total_count int NOT NULL default 0,
         singletons_active text[],
+        heartbeat_seconds int,
         monitor_on timestamp with time zone,
         maintain_on timestamp with time zone,
         created_on timestamp with time zone not null default now(),
@@ -179,7 +180,9 @@ async function migratePgBoss(db: PGlite): Promise<void> {
         keep_until timestamp with time zone NOT NULL default now() + interval '604800',
         output jsonb,
         dead_letter text,
-        policy text
+        policy text,
+        heartbeat_on timestamp with time zone,
+        heartbeat_seconds int
       ) PARTITION BY LIST (name)`);
 
   await db.exec('ALTER TABLE pgboss.job ADD PRIMARY KEY (name, id)');
@@ -318,7 +321,8 @@ async function migratePgBoss(db: PGlite): Promise<void> {
           warning_queued,
           dead_letter,
           partition,
-          table_name
+          table_name,
+          heartbeat_seconds
         )
         VALUES (
           queue_name,
@@ -333,7 +337,8 @@ async function migratePgBoss(db: PGlite): Promise<void> {
           COALESCE((options->>'warningQueueSize')::int, 0),
           options->>'deadLetter',
           COALESCE((options->>'partition')::bool, false),
-          tablename
+          tablename,
+          (options->>'heartbeatSeconds')::int
         )
         ON CONFLICT DO NOTHING
         RETURNING created_on
@@ -395,5 +400,7 @@ async function migratePgBoss(db: PGlite): Promise<void> {
       LANGUAGE plpgsql;
     `);
 
-  await db.exec(`INSERT INTO pgboss.version(version) VALUES (29)`);
+  // Must match the schema version expected by the installed pg-boss
+  // See: node_modules/pg-boss/package.json → pgboss.schema
+  await db.exec(`INSERT INTO pgboss.version(version) VALUES (30)`);
 }

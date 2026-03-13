@@ -8,7 +8,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-%3E%3D10-336791.svg)](https://www.postgresql.org/)
 
 ```bash
-npm install pg-workflows
+npm install pg-workflows pg
 ```
 
 ---
@@ -52,7 +52,7 @@ If you need enterprise-grade features like distributed tracing, complex DAG sche
 - **Configurable Timeouts** - Set workflow-level and step-level timeouts to prevent runaway executions.
 - **Progress Tracking** - Monitor workflow completion percentage, completed steps, and total steps in real-time.
 - **Input Validation** - Define schemas with Zod for type-safe, validated workflow inputs.
-- **Built on pg-boss** - Leverages the battle-tested [pg-boss](https://github.com/timgit/pg-boss) job queue for reliable task scheduling.
+- **Built on pg-boss** - Leverages the battle-tested [pg-boss](https://github.com/timgit/pg-boss) job queue for reliable task scheduling. pg-boss is bundled as a dependency - no separate install or configuration needed.
 
 ---
 
@@ -76,18 +76,19 @@ All state lives in PostgreSQL. No Redis. No message broker. No external schedule
 ### 1. Install
 
 ```bash
-npm install pg-workflows pg-boss
+npm install pg-workflows pg
 # or
-yarn add pg-workflows pg-boss
+yarn add pg-workflows pg
 # or
-bun add pg-workflows pg-boss
+bun add pg-workflows pg
 ```
+
+> `pg` is a peer dependency - you bring your own PostgreSQL driver. `pg-boss` is bundled automatically.
 
 ### 2. Define a Workflow
 
 ```typescript
 import { WorkflowEngine, workflow } from 'pg-workflows';
-import PgBoss from 'pg-boss';
 import { z } from 'zod';
 
 // Define a durable workflow
@@ -125,12 +126,17 @@ const sendWelcomeEmail = workflow(
 ### 3. Start the Engine
 
 ```typescript
-const boss = new PgBoss({
+// Option A: Connection string (simplest - engine manages everything)
+const engine = new WorkflowEngine({
   connectionString: process.env.DATABASE_URL,
+  workflows: [sendWelcomeEmail],
 });
 
+// Option B: Bring your own pg.Pool
+import pg from 'pg';
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const engine = new WorkflowEngine({
-  boss,
+  pool,
   workflows: [sendWelcomeEmail],
 });
 
@@ -549,12 +555,26 @@ console.log({
 #### Constructor
 
 ```typescript
+// With connection string (engine creates and owns the pool)
 const engine = new WorkflowEngine({
-  boss: PgBoss,                    // Required: pg-boss instance
-  workflows: WorkflowDefinition[], // Optional: register workflows on init
-  logger: WorkflowLogger,          // Optional: custom logger
+  connectionString: string,          // PostgreSQL connection string
+  workflows?: WorkflowDefinition[],  // Optional: register workflows on init
+  logger?: WorkflowLogger,           // Optional: custom logger
+  boss?: PgBoss,                     // Optional: bring your own pg-boss instance
+});
+
+// With existing pool (you manage the pool lifecycle)
+const engine = new WorkflowEngine({
+  pool: pg.Pool,                     // Your pg.Pool instance
+  workflows?: WorkflowDefinition[],
+  logger?: WorkflowLogger,
+  boss?: PgBoss,
 });
 ```
+
+Pass either `connectionString` or `pool` (exactly one). When `connectionString` is used, the engine creates the pool internally and closes it on `stop()`.
+
+When `boss` is omitted, pg-boss is created automatically with an isolated schema (`pgboss_v12_pgworkflow`) to avoid conflicts with other pg-boss installations.
 
 #### Methods
 
@@ -643,8 +663,8 @@ enum WorkflowStatus {
 
 The engine automatically runs migrations on startup to create the required tables:
 
-- `workflow_runs` - Stores workflow execution state, step results, and timeline. The optional `resource_id` column (indexed) associates each run with an external entity in your application. See [Resource ID](#resource-id).
-- `pgboss.*` - pg-boss job queue tables for reliable task scheduling
+- `workflow_runs` - Stores workflow execution state, step results, and timeline in the `public` schema. The optional `resource_id` column (indexed) associates each run with an external entity in your application. See [Resource ID](#resource-id).
+- `pgboss_v12_pgworkflow.*` - pg-boss job queue tables for reliable task scheduling (isolated schema to avoid conflicts)
 
 ---
 
@@ -660,7 +680,7 @@ As championed by [postgresforeverything.com](https://postgresforeverything.com/)
 If you're already running Postgres (and you probably should be), adding durable workflows is as simple as:
 
 ```bash
-npm install pg-workflows
+npm install pg-workflows pg
 ```
 
 ---
@@ -669,7 +689,8 @@ npm install pg-workflows
 
 - Node.js >= 18.0.0
 - PostgreSQL >= 10
-- pg-boss >= 10.0.0
+- `pg` >= 8.0.0 (peer dependency)
+- `zod` >= 3.0.0 (optional peer dependency, needed only if using `inputSchema`)
 
 ## Acknowledgments
 

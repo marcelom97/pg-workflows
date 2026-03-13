@@ -1,5 +1,5 @@
 import { merge } from 'es-toolkit';
-import type pg from 'pg';
+import pg from 'pg';
 import { type Db, type Job, PgBoss } from 'pg-boss';
 import type { z } from 'zod';
 import { parseWorkflowHandler } from './ast-parser';
@@ -33,6 +33,13 @@ import {
 const PAUSE_EVENT_NAME = '__internal_pause';
 const WORKFLOW_RUN_QUEUE_NAME = 'workflow-run';
 const LOG_PREFIX = '[WorkflowEngine]';
+const DEFAULT_PGBOSS_SCHEMA = 'pgboss_v12_pgworkflow';
+
+export type WorkflowEngineOptions = {
+  workflows?: WorkflowDefinition[];
+  logger?: WorkflowLogger;
+  boss?: PgBoss;
+} & ({ pool: pg.Pool; connectionString?: never } | { connectionString: string; pool?: never });
 
 const StepTypeToIcon = {
   [StepType.RUN]: 'λ',
@@ -83,6 +90,7 @@ export class WorkflowEngine {
   private boss: PgBoss;
   private db: Db;
   private pool: pg.Pool;
+  private _ownsPool = false;
   private unregisteredWorkflows = new Map<string, WorkflowDefinition>();
   private _started = false;
 
@@ -92,19 +100,17 @@ export class WorkflowEngine {
   >();
   private logger: WorkflowInternalLogger;
 
-  constructor({
-    workflows,
-    logger,
-    boss,
-    pool,
-  }: {
-    pool: pg.Pool;
-    workflows?: WorkflowDefinition[];
-    logger?: WorkflowLogger;
-    boss?: PgBoss;
-  }) {
+  constructor({ workflows, logger, boss, ...connectionOptions }: WorkflowEngineOptions) {
     this.logger = this.buildLogger(logger ?? defaultLogger);
-    this.pool = pool;
+
+    if ('pool' in connectionOptions && connectionOptions.pool) {
+      this.pool = connectionOptions.pool;
+    } else if ('connectionString' in connectionOptions && connectionOptions.connectionString) {
+      this.pool = new pg.Pool({ connectionString: connectionOptions.connectionString });
+      this._ownsPool = true;
+    } else {
+      throw new WorkflowEngineError('Either pool or connectionString must be provided');
+    }
 
     if (workflows) {
       this.unregisteredWorkflows = new Map(workflows.map((workflow) => [workflow.id, workflow]));
@@ -112,13 +118,13 @@ export class WorkflowEngine {
 
     const db: Db = {
       executeSql: (text: string, values?: unknown[]) =>
-        pool.query(text, values) as Promise<{ rows: unknown[] }>,
+        this.pool.query(text, values) as Promise<{ rows: unknown[] }>,
     };
 
     if (boss) {
       this.boss = boss;
     } else {
-      this.boss = new PgBoss({ db });
+      this.boss = new PgBoss({ db, schema: DEFAULT_PGBOSS_SCHEMA });
     }
     this.db = this.boss.getDb();
   }
@@ -166,6 +172,10 @@ export class WorkflowEngine {
 
   async stop(): Promise<void> {
     await this.boss.stop();
+
+    if (this._ownsPool) {
+      await this.pool.end();
+    }
 
     this._started = false;
 
